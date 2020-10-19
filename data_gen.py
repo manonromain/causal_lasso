@@ -71,7 +71,7 @@ def gen_random_graph(n, mean_deg):
     """
     assert mean_deg <= n-1
     prob_one_edge = mean_deg/(n-1)
-    beta = np.triu(np.random.random((n, n)) > prob_one_edge, k=1)
+    beta = np.triu(np.random.random((n, n)) < prob_one_edge, k=1)
     return np.float32(beta)
 
 
@@ -107,8 +107,6 @@ def sample_lin_scms(graph_type, noise_type, adj_matrix, nb_samples=1000,
     Returns:
         X (np.array): [nb_samples, n] sample matrix
         beta (np.array): [n, n] weighted adjacency matrix
-        gt_cov (np.array): [n, n] population covariance matrix
-        gt_prec (np.array): [n, n] population precision matrix
         sigma_n (np.array): [n, n] sample covariance matrix
     """
     n = adj_matrix.shape[0]
@@ -116,9 +114,7 @@ def sample_lin_scms(graph_type, noise_type, adj_matrix, nb_samples=1000,
         beta = simulate_parameter(adj_matrix, w_ranges)
     else:
         beta = adj_matrix
-    gt_prec = (np.eye(n) - beta) @ (np.eye(n) - beta).T
-    aux_inv = np.linalg.inv(np.eye(n) - adj_matrix)
-    gt_cov = aux_inv.T @ aux_inv
+    aux_inv = np.linalg.inv(np.eye(n) - beta)
 
     if graph_type == "sachs":
         # need to sort features - alphabetically is random
@@ -134,9 +130,8 @@ def sample_lin_scms(graph_type, noise_type, adj_matrix, nb_samples=1000,
         else:
             raise NotImplementedError
         X = epsilon @ aux_inv
-
     sigma_n = np.cov(X.T, bias=True)
-    return X, beta, gt_cov, gt_prec, sigma_n
+    return X, beta, sigma_n
 
 
 def loadBNrepo(dataset):

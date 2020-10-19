@@ -29,7 +29,8 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
 
     m, n = X.shape
     if m > n:
-        s_mat = 1 / m * np.real(sqrtm(X.T @ X))
+        # s_mat = 1 / np.sqrt(m) * np.real(sqrtm(X.T  @ X))
+        s_mat = np.real(sqrtm(np.cov(X.T, bias=True)))
     else:
         s_mat = 1 / np.sqrt(m) * X
     prev_support = W0 > 0.5
@@ -62,7 +63,7 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
                         "nb_change_support": [], "support": []}
 
     # Constants
-    lamb = 500
+    gamma = 500
 
     # Init
     Wk = W0
@@ -72,23 +73,31 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
     pbar = tqdm(desc="NoLips", total=max_iter)
     while (it_nolips < 2 or (np.abs((nnl_prev - nnl_curr)/nnl_prev) >= eps)) and it_nolips < max_iter:
         # Implementing dynamic version of Dragomir et al. (2019)
-        while True:
+        it = 0
+        while it < 1000:
             # Solving Bregman iteration map
-            if not mosek:
-                next_W = solve_subproblem_cvxpy(s_mat, Wk,
-                                                lamb, l1_pen, dagness_pen, dagness_exp)
-            else:
-                next_W = solve_subproblem_mosek(s_mat, Wk,
-                                                lamb, l1_pen, dagness_pen, dagness_exp)
+            try:
+                if not mosek:
+                    next_W = solve_subproblem_cvxpy(s_mat, Wk,
+                                                    gamma, l1_pen, dagness_pen, dagness_exp)
+                else:
+                    next_W = solve_subproblem_mosek(s_mat, Wk,
+                                                    gamma, l1_pen, dagness_pen, dagness_exp)
+            except msk.SolutionError as e:
+                print(e)
+                gamma = gamma / 2
+                print("Trying gamma smaller", it, gamma)
+                it += 1
+                continue
 
             # Sufficient decrease condition
             if np.abs(dag_penalty(next_W) - dag_penalty(Wk) - grad_f_scalar_H(Wk, next_W - Wk))  \
-               > 1 / lamb * distance_kernel(next_W, Wk):
-                lamb = lamb / 2
+               > 1 / gamma * distance_kernel(next_W, Wk):
+                gamma = gamma / 2
             else:
                 break
 
-        lamb = min(2 * lamb, 5000)
+        gamma = min(2 * gamma, 2000)
 
         Wk = next_W
         
@@ -116,29 +125,29 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
         logging_np = {k: np.array(v) for k, v in logging_dict.items()}
         return Wk, logging_np
     else:
-        return Wk
+        return Wk, {}
 
 
-def compute_C(n, Wk_value, dagness_pen, dagness_exp, lamb):
-    # Compute C = grad f - 1/lamb grad h
+def compute_C(n, Wk_value, dagness_pen, dagness_exp, gamma):
+    # Compute C = grad f - 1/gamma grad h
     Wk_norm = np.linalg.norm(Wk_value, "fro")
     Wk_normalized = Wk_value / Wk_norm
     C = dagness_pen * n * dagness_exp * np.linalg.matrix_power(np.eye(n) + dagness_exp * Wk_value, n - 1)
-    C -= 1/lamb * dagness_pen * (n - 1) * n * dagness_exp * (1 + dagness_exp * Wk_norm) ** (n - 1) * Wk_normalized.T
+    C -= 1/gamma * dagness_pen * (n - 1) * n * dagness_exp * (1 + dagness_exp * Wk_norm) ** (n - 1) * Wk_normalized.T
     return C
 
 
 def solve_subproblem_mosek(s_mat, Wk_value,
-                           lamb, l1_pen, dagness_pen, dagness_exp):
+                           gamma, l1_pen, dagness_pen, dagness_exp):
     """ Solves argmin g(W) + <grad f (Wk), W-Wk>
-                        + 1/lamb * Dh(W, Wk)
+                        + 1/gamma * Dh(W, Wk)
 
         this is only implemented for a specific penalty and kernel
     """
 
     n = s_mat.shape[1]
 
-    C = compute_C(n, Wk_value, dagness_pen, dagness_exp, lamb)
+    C = compute_C(n, Wk_value, dagness_pen, dagness_exp, gamma)
 
     with msk.Model('model') as M:
         W = M.variable('W', [n, n], msk.Domain.greaterThan(0.))
@@ -158,11 +167,15 @@ def solve_subproblem_mosek(s_mat, Wk_value,
         z2 = msk.Expr.mul(s_mat, msk.Expr.sub(msk.Matrix.eye(n), W))
         M.constraint("rqc1", msk.Expr.vstack(t, .5, msk.Expr.flatten(z2)), msk.Domain.inRotatedQCone())
 
+        # sum(A) >= n/(n-2)dagness_exp
+        normA1 = msk.Expr.sum(W)
+        M.constraint("lin1", normA1, msk.Domain.greaterThan(n / ((n - 2) * dagness_exp)))
+
         # Set the objective function
         obj_spars = msk.Expr.sum(W)
         obj_tr = msk.Expr.dot(C.T, W)
         obj_vec = msk.Expr.vstack([t, obj_tr, s, obj_spars])
-        obj = msk.Expr.dot([1., 1., dagness_pen * (n - 1) / lamb, l1_pen], obj_vec)
+        obj = msk.Expr.dot([1., 1., dagness_pen * (n - 1) / gamma, l1_pen], obj_vec)
 
         M.objective(msk.ObjectiveSense.Minimize, obj)
         M.solve()
@@ -176,30 +189,32 @@ def solve_subproblem_mosek(s_mat, Wk_value,
 
 
 def solve_subproblem_cvxpy(s_mat, Wk_value,
-                           lamb, l1_pen, dagness_pen, dagness_exp):
+                           gamma, l1_pen, dagness_pen, dagness_exp):
     """ Solves argmin g(W) + <grad f (Wk), W-Wk>
-                        + 1/lamb * Dh(W, Wk)
+                        + 1/gamma * Dh(W, Wk)
 
         this is only implemented for a specific penalty and kernel
     """
 
     n = s_mat.shape[1]
 
-    # Compute C = grad g - 1/lamb grad h
-    C = compute_C(n, Wk_value, dagness_pen, dagness_exp, lamb)
+    # Compute C = grad g - 1/gamma grad h
+    C = compute_C(n, Wk_value, dagness_pen, dagness_exp, gamma)
 
     W = cp.Variable([n, n], nonneg=True)
     W.value = Wk_value
 
     # Set the objective function
     obj_ll = cp.norm(s_mat @ (np.eye(n) - W), "fro")**2
-    obj_spars = l1_pen * msk.Expr.sum(W)
+    obj_spars = l1_pen * cp.sum(W)
     obj_tr = cp.trace(C @ W)
-    obj_kernel = dagness_pen * (n - 1) / lamb * (1 + dagness_exp * cp.norm(W, "fro")) ** n
+    obj_kernel = dagness_pen * (n - 1) / gamma * (1 + dagness_exp * cp.norm(W, "fro")) ** n
     obj = obj_ll + obj_spars + obj_tr + obj_kernel
 
-    prob = cp.Problem(cp.Minimize(obj))
+    prob = cp.Problem(cp.Minimize(obj), [cp.sum(W) >= n/((n-2)*dagness_exp)])
     prob.solve()
+    if prob.status != "optimal":
+        print(prob.status)
     next_W = W.value
 
     # Correcting round-off errors
