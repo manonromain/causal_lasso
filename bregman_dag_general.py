@@ -30,10 +30,10 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
     m, n = X.shape
     prev_support = np.abs(W0_plus - W0_minus) > 0.5
-    # if m > n:
-    #     s_mat = 1 / m * np.real(sqrtm(X.T @ X))
-    # else:
-    s_mat = 1 / np.sqrt(m) * X
+    if m > n:
+        s_mat = 1 / m * np.real(sqrtm(X.T @ X))
+    else:
+        s_mat = 1 / np.sqrt(m) * X
 
     # Functions
     def dag_penalty(W_plus, W_minus):
@@ -64,7 +64,7 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
     if logging:
         log_dict = {"dagness_exp": dagness_exp, "dagness_pen": dagness_pen, "l1_pen": l1_pen, # constants
-                   "time": [], "ll_trace": [], "l1_val": [], "dag_constraint": [],
+                   "time": [], "l2_error": [], "l1_val": [], "dag_constraint": [],
                    "nb_change_support":[], "support": [], "support_pos": [], "support_neg": []
                     }
 
@@ -73,23 +73,32 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
     # Init
     Wk_plus, Wk_minus = W0_plus, W0_minus
-    nnl_curr, nnl_prev = 0, 0
+    l2_error_curr, l2_error_prev = 0, 0
     start = time.time()
     it_nolips = 0
     pbar = tqdm(desc="NoLips sum", total=max_iter)
-    while (it_nolips < 2 or (np.abs((nnl_prev - nnl_curr)/nnl_prev) >= eps)) and (it_nolips < max_iter):
+    while (it_nolips < 2 or (np.abs((l2_error_prev - l2_error_curr)/l2_error_prev) >= eps)) and (it_nolips < max_iter):
         it = 0
         while True:
-            if mosek:
-                next_W_plus, next_W_minus = bregman_map_mosek(s_mat, Wk_plus, Wk_minus,
-                                                              gamma, l1_pen, dagness_pen, dagness_exp)
-            else:
-                next_W_plus, next_W_minus = bregman_map_cvx(s_mat, Wk_plus, Wk_minus,
-                                                            gamma, l1_pen, dagness_pen, dagness_exp)
+            if gamma < 1:
+                print("violated L-smad")
+
+            try:
+                if mosek:
+                    next_W_plus, next_W_minus = bregman_map_mosek(s_mat, Wk_plus, Wk_minus,
+                                                                  gamma, l1_pen, dagness_pen, dagness_exp)
+                else:
+                    next_W_plus, next_W_minus = bregman_map_cvx(s_mat, Wk_plus, Wk_minus,
+                                                                gamma, l1_pen, dagness_pen, dagness_exp)
+            except msk.SolutionError:
+                print("mosek can't solve", it)
+                gamma = gamma / 2
+                it += 1
+                continue
 
             # Sufficient decrease condition
-            if np.abs(dag_penalty(next_W_plus, next_W_minus) - dag_penalty(Wk_plus, Wk_minus)
-                      - grad_f_scalar_H(Wk_plus, Wk_minus, next_W_plus - Wk_plus, next_W_minus - Wk_minus))  \
+            if dag_penalty(next_W_plus, next_W_minus) - dag_penalty(Wk_plus, Wk_minus) \
+               - grad_f_scalar_H(Wk_plus, Wk_minus, next_W_plus - Wk_plus, next_W_minus - Wk_minus)  \
                > 1 / gamma * distance_kernel(next_W_plus, next_W_minus, Wk_plus, Wk_minus):
                 gamma = gamma / 2
                 it += 1
@@ -98,21 +107,21 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
         gamma_k = gamma
         gamma = min(2 * gamma, 10000)
 
-        if np.linalg.norm(next_W_minus + next_W_plus, "fro") < 1/((n-2)*dagness_exp):
+        if np.sum(next_W_minus + next_W_plus) < n/((n-2)*dagness_exp):
              print("assertion false")
 
         # Compute current iterate
         Wk = next_W_plus - next_W_minus
         Wk_plus, Wk_minus = next_W_plus, next_W_minus
-        nnl_prev = nnl_curr
-        nnl_curr = np.linalg.norm(s_mat @ (np.eye(n) - next_W_plus + next_W_minus), "fro")**2
+        l2_error_prev = l2_error_curr
+        l2_error_curr = np.linalg.norm(s_mat @ (np.eye(n) - next_W_plus + next_W_minus), "fro")**2
         dag_penalty_k = dag_penalty(Wk_plus, Wk_minus)
 
         if logging:
             support = np.abs(Wk) > 0.5
             # Logging
             log_dict["time"].append(time.time() - start)
-            log_dict["ll_trace"].append(nnl_curr)
+            log_dict["l2_error"].append(l2_error_curr)
             log_dict["dag_constraint"].append(dag_penalty_k/dagness_pen)
             log_dict["l1_val"].append(np.sum(next_W_plus) + np.sum(next_W_minus))
             log_dict["nb_change_support"].append(np.sum(support ^ prev_support))
@@ -121,11 +130,11 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
             log_dict["support_neg"].append((Wk < -0.5).flatten())
             prev_support = support
 
-        if it_nolips%10==0 and verbose:
+        if it_nolips%10 == 0 and verbose:
             print("Objective value at iteration {}".format(it_nolips))
-            print(nnl_curr + dag_penalty_k + l1_pen * np.sum(Wk_plus + Wk_minus))
-        if it_nolips%10==0:
-            dagness_pen *= 2
+            print(l2_error_curr + dag_penalty_k + l1_pen * np.sum(Wk_plus + Wk_minus))
+        # if it_nolips % 10==0:
+        #     dagness_pen *= 2
 
         it_nolips += 1
         pbar.update(1)
@@ -160,7 +169,7 @@ def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
     W_plus.value = Wk_plus_value
     W_minus = cp.Variable((n, n), nonneg=True)
     W_minus.value = Wk_minus_value
-    sum_W = W_plus + W_minus # sum variable
+    sum_W = W_plus + W_minus  # sum variable
 
     obj_ll = cp.norm(s_mat @ (np.eye(n) - W_plus + W_minus), "fro") ** 2
     obj_spars = l1_pen * cp.sum(W_plus + W_minus)
@@ -179,17 +188,18 @@ def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
     if prob.status != "optimal":
         prob.solve(verbose=True)
 
-    next_W_plus, next_W_minus = np.maximum(W_plus.value, 0.0), np.maximum(W_minus.value, 0.0)
+    # next_W_plus, next_W_minus = np.maximum(W_plus.value, 0.0), np.maximum(W_minus.value, 0.0)
+    next_W_plus, next_W_minus = W_plus.value, W_minus.value
 
-    # FIXME
-    tilde_w_plus = np.maximum(next_W_plus - next_W_minus, 0.0)
-    tilde_w_minus = np.maximum(next_W_minus - next_W_plus, 0.0)
-    tilde_sum = tilde_w_plus + tilde_w_minus
-
-    if np.sum(tilde_sum) >= n / ((n - 2) * dagness_exp):
-        return tilde_w_plus, tilde_w_minus
-    else:
-        return next_W_plus, next_W_minus
+    # # FIXME
+    # tilde_w_plus = np.maximum(next_W_plus - next_W_minus, 0.0)
+    # tilde_w_minus = np.maximum(next_W_minus - next_W_plus, 0.0)
+    # tilde_sum = tilde_w_plus + tilde_w_minus
+    #
+    # if np.sum(tilde_sum) >= n / ((n - 2) * dagness_exp):
+    #     return tilde_w_plus, tilde_w_minus
+    # else:
+    return next_W_plus, next_W_minus
 
 
 def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
@@ -213,8 +223,8 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
         W_minus.setLevel(Wk_minus_value.flatten())
         sum_W = msk.Expr.add(W_plus, W_minus)
         diff_W = msk.Expr.sub(W_plus, W_minus)
-        abs_W = M.variable('abs_W', W_plus.getShape(), msk.Domain.unbounded())  # for absolute value
-        a = M.variable('norm1')  # for absolute value
+        # abs_W = M.variable('abs_W', W_plus.getShape(), msk.Domain.unbounded())  # for absolute value
+        # a = M.variable('norm1')  # for absolute value
         t = M.variable('T')
         s1 = M.variable("s1")
         s = M.variable("s")
@@ -235,19 +245,17 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
         normW1 = msk.Expr.sum(sum_W)
         M.constraint("lin1", normW1, msk.Domain.greaterThan(n/((n-2)*dagness_exp)))
 
-        M.constraint(msk.Expr.add(abs_W, diff_W), msk.Domain.greaterThan(0.0))
-        M.constraint(msk.Expr.sub(abs_W, diff_W), msk.Domain.greaterThan(0.0))
-
-        # a >= sum |u_{ij}|, where t, x have the same shape
-        M.constraint(msk.Expr.sub(a, msk.Expr.sum(abs_W)), msk.Domain.greaterThan(0.0))
+        # M.constraint(msk.Expr.add(abs_W, diff_W), msk.Domain.greaterThan(0.0))
+        # M.constraint(msk.Expr.sub(abs_W, diff_W), msk.Domain.greaterThan(0.0))
+        #
+        # # a >= sum |u_{ij}|, where t, x have the same shape
+        # M.constraint(msk.Expr.sub(a, msk.Expr.sum(abs_W)), msk.Domain.greaterThan(0.0))
 
         # Set the objective function
         obj_tr = msk.Expr.dot(C.T, sum_W)
-        obj_vec = msk.Expr.vstack([t, obj_tr, s, a])
+        obj_vec = msk.Expr.vstack([t, obj_tr, s, normW1])
         obj = msk.Expr.dot([1., 1., dagness_pen * (n - 1) / gamma, l1_pen], obj_vec)
 
-        # obj_vec = msk.Expr.vstack([t, obj_tr, s, obj_spars])
-        # obj = msk.Expr.dot([1., 1., dagness_pen * (n - 1) / gamma, l1_pen], obj_vec)
         M.objective(msk.ObjectiveSense.Minimize, obj)
 
         M.solve()
@@ -263,13 +271,13 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
         # next_W_minus = np.maximum(next_W_minus, 0.0)
 
     # compute w_tilde
-    tilde_w_plus = np.maximum(next_W_plus - next_W_minus, 0.0)
-    tilde_w_minus = np.maximum(next_W_minus - next_W_plus, 0.0)
-    tilde_sum = tilde_w_plus + tilde_w_minus
-    if np.sum(tilde_sum) >= n/((n-2)*dagness_exp):
-        print("True")
-        return tilde_w_plus, tilde_w_minus
-    else:
-        next_W_plus[next_W_plus < 0.2] = 0
-        next_W_minus[next_W_minus < 0.2] = 0
-        return next_W_plus, next_W_minus
+    # tilde_w_plus = np.maximum(next_W_plus - next_W_minus, 0.0)
+    # tilde_w_minus = np.maximum(next_W_minus - next_W_plus, 0.0)
+    # tilde_sum = tilde_w_plus + tilde_w_minus
+    # if np.sum(tilde_sum) >= n/((n-2)*dagness_exp):
+    #     print("True")
+    #     return tilde_w_plus, tilde_w_minus
+    # else:
+    #     next_W_plus[next_W_plus < 0.2] = 0
+    #     next_W_minus[next_W_minus < 0.2] = 0
+    return next_W_plus, next_W_minus

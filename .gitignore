@@ -1,0 +1,16 @@
+Data/
+Archives/
+.DS_Store
+.idea/
+.ipynb_checkpoints/*
+__pycache__/*
+Brouillon*
+*.npy
+*.csv
+*.out
+IMAGES/
+*.pdf
+*.png
+*.psd
+*.json
+*.dot

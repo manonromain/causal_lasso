@@ -59,7 +59,7 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
 
     if logging:
         logging_dict = {"dagness_exp": dagness_exp, "dagness_pen": dagness_pen, "l1_pen": l1_pen,  # constants
-                        "time": [], "ll_trace": [], "l1_val": [], "dag_constraint": [],
+                        "time": [], "l2_error": [], "l1_val": [], "dag_constraint": [],
                         "nb_change_support": [], "support": []}
 
     # Constants
@@ -67,11 +67,11 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
 
     # Init
     Wk = W0
-    nnl_curr, nnl_prev = 0, 0
+    l2_error_curr, l2_error_prev = 0, 0
     it_nolips = 0
     start = time.time()
     pbar = tqdm(desc="NoLips", total=max_iter)
-    while (it_nolips < 2 or (np.abs((nnl_prev - nnl_curr)/nnl_prev) >= eps)) and it_nolips < max_iter:
+    while (it_nolips < 2 or (np.abs((l2_error_prev - l2_error_curr)/l2_error_prev) >= eps)) and it_nolips < max_iter:
         # Implementing dynamic version of Dragomir et al. (2019)
         it = 0
         while it < 1000:
@@ -91,7 +91,7 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
                 continue
 
             # Sufficient decrease condition
-            if np.abs(dag_penalty(next_W) - dag_penalty(Wk) - grad_f_scalar_H(Wk, next_W - Wk))  \
+            if dag_penalty(next_W) - dag_penalty(Wk) - grad_f_scalar_H(Wk, next_W - Wk)  \
                > 1 / gamma * distance_kernel(next_W, Wk):
                 gamma = gamma / 2
             else:
@@ -101,14 +101,14 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
 
         Wk = next_W
         
-        nnl_prev = nnl_curr
-        nnl_curr = 1/m * np.linalg.norm(X @ (np.eye(n) - Wk), "fro")**2
+        l2_error_prev = l2_error_curr
+        l2_error_curr = 1/m * np.linalg.norm(X @ (np.eye(n) - Wk), "fro")**2
         dag_penalty_k = dag_penalty(Wk)
         # Logging
         if logging:
             support = Wk > 0.5
             logging_dict["time"].append(time.time() - start)
-            logging_dict["ll_trace"].append(nnl_curr)
+            logging_dict["l2_error"].append(l2_error_curr)
             logging_dict["dag_constraint"].append(dag_penalty_k/dagness_pen)
             logging_dict["l1_val"].append(np.sum(Wk))
             logging_dict["nb_change_support"].append(np.sum(prev_support ^ support))
@@ -117,7 +117,7 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
         
         if verbose:
             print("Objective value at iteration {}".format(it_nolips))
-            print(nnl_curr + dag_penalty_k + l1_pen * np.sum(Wk))
+            print(l2_error_curr + dag_penalty_k + l1_pen * np.sum(Wk))
         it_nolips += 1
         pbar.update(1)
     print("Done in", time.time() - start, "s and", it_nolips, "iterations")
@@ -167,9 +167,9 @@ def solve_subproblem_mosek(s_mat, Wk_value,
         z2 = msk.Expr.mul(s_mat, msk.Expr.sub(msk.Matrix.eye(n), W))
         M.constraint("rqc1", msk.Expr.vstack(t, .5, msk.Expr.flatten(z2)), msk.Domain.inRotatedQCone())
 
-        # sum(A) >= n/(n-2)dagness_exp
-        normA1 = msk.Expr.sum(W)
-        M.constraint("lin1", normA1, msk.Domain.greaterThan(n / ((n - 2) * dagness_exp)))
+        # # sum(A) >= n/(n-2)dagness_exp
+        # normA1 = msk.Expr.sum(W)
+        # M.constraint("lin1", normA1, msk.Domain.greaterThan(n / ((n - 2) * dagness_exp)))
 
         # Set the objective function
         obj_spars = msk.Expr.sum(W)
@@ -184,7 +184,7 @@ def solve_subproblem_mosek(s_mat, Wk_value,
         next_W = M.getVariable('W').level().reshape(n, n)
 
         # Correcting mosek errors
-        next_W = np.maximum(next_W, 0.0)
+        # next_W = np.maximum(next_W, 0.0)
     return next_W
 
 
