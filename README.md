@@ -7,6 +7,7 @@ This package requires `numpy`, `scipy`, `tqdm` and `networkx`, installation can 
 Minimal testing code is:
 ```
 import numpy as np
+import networkx as nx
 from bregman_solver import BregmanSolver
 X = np.random.random((1000, 30)) # Replace with your data
 lasso = BregmanSolver()
