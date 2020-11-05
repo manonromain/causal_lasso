@@ -1,9 +1,9 @@
-import cvxpy as cp
+
 import numpy as np
 import time
 from tqdm.autonotebook import tqdm
 from scipy.linalg import sqrtm
-import mosek.fusion as msk
+
 
 
 def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=False, max_iter=200,
@@ -86,9 +86,11 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
             try: # TODO more solvers
                 if mosek:
+                    import mosek.fusion as msk
                     next_W_plus, next_W_minus = bregman_map_mosek(s_mat, Wk_plus, Wk_minus,
                                                                   gamma, l1_pen, dagness_pen, dagness_exp)
                 else:
+                    import cvxpy as cp
                     next_W_plus, next_W_minus = bregman_map_cvx(s_mat, Wk_plus, Wk_minus,
                                                                 gamma, l1_pen, dagness_pen, dagness_exp)
             except msk.SolutionError:

@@ -1,4 +1,3 @@
-
 import numpy as np
 
 def compare_graphs(w_gt, w, verbose=True):
