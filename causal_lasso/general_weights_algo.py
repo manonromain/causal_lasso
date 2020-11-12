@@ -54,7 +54,8 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
     def distance_kernel(Wx_plus, Wx_minus, Wy_plus, Wy_minus):
         """
-        the kernel used is C (1+beta||W||_F)^n where C = mu * (n - 1)"""
+        the kernel used is C (1+beta||W||_F)^n where C = mu * (n - 1)
+        """
         sum_x = Wx_plus + Wx_minus
         sum_y = Wy_plus + Wy_minus
         norm_y = np.linalg.norm(sum_y, "fro")
@@ -82,14 +83,14 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
     l2_error_curr, l2_error_prev = 0, 0
     start = time.time()
     it_nolips = 0
-    pbar = tqdm(desc="NoLips sum", total=max_iter)
+    pbar = tqdm(desc="Causal Lasso", total=max_iter)
     while (it_nolips < 2 or (np.abs((l2_error_prev - l2_error_curr)/l2_error_prev) >= eps)) and (it_nolips < max_iter):
         it = 0
         while True:
             if gamma < 1:
                 print("violated L-smad")
 
-            try: # TODO more solvers
+            try:  # TODO more solvers
                 if mosek:
                     next_W_plus, next_W_minus = bregman_map_mosek(s_mat, Wk_plus, Wk_minus,
                                                                   gamma, l1_pen, dagness_pen, dagness_exp)
@@ -115,7 +116,7 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
         # TODO delete?
         if np.sum(next_W_minus + next_W_plus) < n/((n-2)*dagness_exp):
-             print("assertion false")
+             print("assertion false because of thresholding: iteration map may not be stable")
 
         # Compute current iterate
         Wk = next_W_plus - next_W_minus
@@ -267,10 +268,12 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
     tilde_sum = tilde_W_plus + tilde_W_minus
     # If we stay in the right space
     if np.sum(tilde_sum) >= n/((n-2)*dagness_exp):
-        next_W_plus[next_W_plus < 0.4] = 0
-        next_W_minus[next_W_minus < 0.4] = 0
+        # Thresholding
+        tilde_W_plus[tilde_W_plus < 0.4] = 0
+        tilde_W_minus[tilde_W_minus < 0.4] = 0
         return tilde_W_plus, tilde_W_minus
     else:
+        # Thresholding
         next_W_plus[next_W_plus < 0.4] = 0
         next_W_minus[next_W_minus < 0.4] = 0
         return next_W_plus, next_W_minus

@@ -14,3 +14,5 @@ IMAGES/
 *.psd
 *.json
 *.dot
+causal_lasso/__pycache__/*
+graph_tools/__pycache__/*

@@ -32,12 +32,12 @@ class CLSolver:
     def fit(self, X):
         n = X.shape[1]
         if self.version == "gen":
-            W0_plus, W0_minus = 4 * np.random.random((n, n)), 4 * np.random.random((n, n))
+            W0_plus, W0_minus = np.random.random((n, n)), np.random.random((n, n))
             W_out, log_dict = dyn_no_lips_gen(X, W0_plus, W0_minus, self.dagness_exp, self.dagness_pen, self.l1_pen,
                                               eps=self.eps, mosek=self.mosek, max_iter=self.max_iter,
                                               verbose=self.verbose, logging=self.logging)
         else:
-            W0 = 4 * np.random.random((n, n))
+            W0 = np.random.random((n, n))
             W_out, log_dict = dyn_no_lips_pos(X, W0, self.dagness_exp, self.dagness_pen, self.l1_pen,
                                               eps=self.eps, mosek=self.mosek, max_iter=self.max_iter,
                                               verbose=self.verbose, logging=self.logging)

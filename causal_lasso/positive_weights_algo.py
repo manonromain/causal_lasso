@@ -72,7 +72,7 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
     l2_error_curr, l2_error_prev = 0, 0
     it_nolips = 0
     start = time.time()
-    pbar = tqdm(desc="NoLips", total=max_iter)
+    pbar = tqdm(desc="Causal Lasso for positive weights", total=max_iter)
     while (it_nolips < 2 or (np.abs((l2_error_prev - l2_error_curr)/l2_error_prev) >= eps)) and it_nolips < max_iter:
         # Implementing dynamic version of Dragomir et al. (2019)
         it = 0
