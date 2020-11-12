@@ -1,6 +1,6 @@
 # Causal Lasso
 
-This repository implements paper "A Bregman Method for Structure Learning on Sparse Directed Acyclic Graphs".
+This repository implements paper "A Bregman Method for Structure Learning on Sparse Directed Acyclic Graphs" by Manon Romain and Alexandre d'Aspremont.
 
 ### Requirements
 
