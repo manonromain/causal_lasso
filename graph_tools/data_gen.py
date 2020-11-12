@@ -1,5 +1,5 @@
-import numpy as np
 import networkx as nx
+import numpy as np
 
 
 def gen_graph(graph_type, n, mean_deg):
@@ -16,7 +16,7 @@ def gen_graph(graph_type, n, mean_deg):
     elif graph_type == "scale-free":
         # select
         import igraph as ig
-        G_ig = ig.Graph.Barabasi(n=n, m=int(round(mean_deg/2)), directed=True)
+        G_ig = ig.Graph.Barabasi(n=n, m=int(round(mean_deg / 2)), directed=True)
         beta = np.array(G_ig.get_adjacency().data)
     else:
         raise NotImplementedError
@@ -40,8 +40,8 @@ def gen_random_graph(n, mean_deg):
     - n (int): number of nodes
     - mean_deg (float): average degree of a node
     """
-    assert mean_deg <= n-1
-    prob_one_edge = mean_deg/(n-1)
+    assert mean_deg <= n - 1
+    prob_one_edge = mean_deg / (n - 1)
     beta = np.triu(np.random.random((n, n)) < prob_one_edge, k=1)
     return np.float32(beta)
 

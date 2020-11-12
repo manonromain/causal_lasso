@@ -1,9 +1,11 @@
-
 import numpy as np
 import time
 from tqdm.autonotebook import tqdm
 from scipy.linalg import sqrtm
-
+try:
+    import mosek.fusion as msk
+except ImportError:
+    pass
 
 
 def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=True, max_iter=500,
@@ -78,11 +80,9 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
             # Solving Bregman iteration map
             try:
                 if not mosek:
-                    import cvxpy as cp
                     next_W = solve_subproblem_cvxpy(s_mat, Wk,
                                                     gamma, l1_pen, dagness_pen, dagness_exp)
                 else:
-                    import mosek.fusion as msk
                     next_W = solve_subproblem_mosek(s_mat, Wk,
                                                     gamma, l1_pen, dagness_pen, dagness_exp)
             except msk.SolutionError as e:

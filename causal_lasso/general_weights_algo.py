@@ -3,6 +3,11 @@ import numpy as np
 import time
 from tqdm.autonotebook import tqdm
 from scipy.linalg import sqrtm
+import cvxpy as cp
+try:
+    import mosek.fusion as msk
+except ImportError:
+    pass
 
 
 
@@ -12,7 +17,7 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
     Args:
         X   (np.array): sample matrix
-        W0_plu s  (np.array): initial positive part adj matrix
+        W0_plus  (np.array): initial positive part adj matrix
         W0_minus  (np.array): initial negative part adj matrix
         dagness_exp  (float): alpha in paper
         dagness_pen  (float): mu in paper
@@ -86,11 +91,9 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
             try: # TODO more solvers
                 if mosek:
-                    import mosek.fusion as msk
                     next_W_plus, next_W_minus = bregman_map_mosek(s_mat, Wk_plus, Wk_minus,
                                                                   gamma, l1_pen, dagness_pen, dagness_exp)
                 else:
-                    import cvxpy as cp
                     next_W_plus, next_W_minus = bregman_map_cvx(s_mat, Wk_plus, Wk_minus,
                                                                 gamma, l1_pen, dagness_pen, dagness_exp)
             except msk.SolutionError:
@@ -138,8 +141,6 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
         if it_nolips%10 == 0 and verbose:
             print("Objective value at iteration {}".format(it_nolips))
             print(l2_error_curr + dag_penalty_k + l1_pen * np.sum(Wk_plus + Wk_minus))
-        # if it_nolips % 10==0:
-        #     dagness_pen *= 2
 
         it_nolips += 1
         pbar.update(1)
@@ -195,13 +196,13 @@ def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
 
     next_W_plus, next_W_minus = W_plus.value, W_minus.value
 
-    # # FIXME
+    # FIXME
     tilde_W_plus = np.maximum(next_W_plus - next_W_minus, 0.0)
     tilde_W_minus = np.maximum(next_W_minus - next_W_plus, 0.0)
     tilde_sum = tilde_W_plus + tilde_W_minus
     #
     if np.sum(tilde_sum) >= n / ((n - 2) * dagness_exp):
-         return tilde_W_plus, tilde_W_minus
+        return tilde_W_plus, tilde_W_minus
     else:
         return next_W_plus, next_W_minus
 
@@ -259,12 +260,6 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
 
         next_W_plus = M.getVariable('W_plus').level().reshape(n, n)
         next_W_minus = M.getVariable('W_minus').level().reshape(n, n)
-
-        # print("mosek obj= ", M.primalObjValue())
-
-        # Corrects round-off errors
-        # next_W_plus = np.maximum(next_W_plus, 0.0)
-        # next_W_minus = np.maximum(next_W_minus, 0.0)
 
     # compute w_tilde: getting rid of ambiguous edges
     tilde_W_plus = np.maximum(next_W_plus - next_W_minus, 0.0)
