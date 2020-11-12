@@ -31,3 +31,5 @@ lasso = BregmanSolver()
 W_est = lasso.fit(X)
 nx.draw(nx.DiGraph(W_est))
 ```
+
+A more detailed tutorial is available in `examples/tutorial.ipynb`
