@@ -1,9 +1,26 @@
 # Causal Lasso
 
-This repository implements paper "A Bregman Method for Structure Learning on Sparse Directed Acyclic Graphs"
+This repository implements paper "A Bregman Method for Structure Learning on Sparse Directed Acyclic Graphs".
 
-This package requires `numpy`, `scipy`, `tqdm` and `networkx`, installation can be done with `pip install requirements.txt`.
+### Requirements
 
+This package requires `numpy`, `scipy`, `tqdm`, `networkx` and `mosek` installation can be done with `pip install requirements.txt`.
+
+
+### Solver 
+For now, the default solver used at each iteration is Mosek. We plan to provide an open source implementation in the near future. 
+
+MOSEK's license is free for academic use, first obtain your license here using institutional email [https://www.mosek.com/products/academic-licenses/] and place the obtained file `mosek.lic` in a file called:
+```
+%USERPROFILE%\mosek\mosek.lic           (Windows)
+$HOME/mosek/mosek.lic                   (Linux, MacOS)
+``` 
+
+
+Further info [here](https://docs.mosek.com/9.2/install/installation.html#setting-up-the-license).
+
+
+### Use
 Minimal testing code is:
 ```
 import numpy as np
