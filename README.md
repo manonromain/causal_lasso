@@ -17,7 +17,7 @@ $HOME/mosek/mosek.lic                   (Linux, MacOS)
 ``` 
 
 
-Further info [here](https://docs.mosek.com/9.2/install/installation.html#setting-up-the-license).
+Further information available [here](https://docs.mosek.com/9.2/install/installation.html#setting-up-the-license).
 
 
 ### Use
