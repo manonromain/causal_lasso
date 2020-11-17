@@ -4,7 +4,7 @@ This repository implements paper "A Bregman Method for Structure Learning on Spa
 
 ### Requirements
 
-This package requires `numpy`, `scipy`, `tqdm`, `networkx` and `mosek`, installation can be done with `pip install requirements.txt`.
+This package requires `numpy`, `scipy`, `tqdm`, `networkx` and `mosek`, installation can be done with `pip install -r docs/requirements.txt`.
 
 
 ### Solver 
@@ -25,9 +25,9 @@ Minimal testing code is:
 ```
 import numpy as np
 import networkx as nx
-from bregman_solver import BregmanSolver
+from causal_lasso.solver import CLSolver
 X = np.random.random((1000, 30)) # Replace with your data
-lasso = BregmanSolver()
+lasso = CLSolver()
 W_est = lasso.fit(X)
 nx.draw(nx.DiGraph(W_est))
 ```
