@@ -14,5 +14,8 @@ IMAGES/
 *.psd
 *.json
 *.dot
+build/
+dist/
+causal_lasso.egg-info/
 causal_lasso/__pycache__/*
 graph_tools/__pycache__/*
