@@ -14,6 +14,7 @@ Contents
    :maxdepth: 2
    
    modules
+   modules_graph_tools 
    license
 
 

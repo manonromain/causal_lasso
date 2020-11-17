@@ -6,9 +6,9 @@ def gen_graph(graph_type, n, mean_deg):
     """Generates and returns a nx.Digraph and its adjacency matrix. Nodes are randomly permutated.
 
     Arguments:
-    - graph_type (string): type of graph Erdos-Renyi, scale-free, sachs or any graph in BNRepo
-    - n (int): number of nodes
-    - mean_deg (float): average degree of nodes
+        graph_type (string): type of graph Erdos-Renyi, scale-free, sachs or any graph in BNRepo
+        n (int): number of nodes
+        mean_deg (float): average degree of nodes
     """
     # beta is the unpermutated adjacency matrix
     if graph_type == "erdos-renyi":
@@ -37,8 +37,8 @@ def gen_random_graph(n, mean_deg):
     """Returns the adjacency matrix of an Erdos Renyi DAG
 
     Args:
-    - n (int): number of nodes
-    - mean_deg (float): average degree of a node
+        n (int): number of nodes
+        mean_deg (float): average degree of a node
     """
     assert mean_deg <= n - 1
     prob_one_edge = mean_deg / (n - 1)
@@ -48,6 +48,7 @@ def gen_random_graph(n, mean_deg):
 
 def simulate_parameter(adj_matrix, w_ranges):
     """Simulate SEM parameters for a DAG.
+    
     Args:
         adj_matrix (np.array): [n, n] binary adj matrix of DAG
         w_ranges (tuple): disjoint weight ranges

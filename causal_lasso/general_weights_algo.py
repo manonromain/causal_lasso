@@ -13,7 +13,7 @@ except ImportError:
 
 def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=False, max_iter=200,
                     verbose=False, logging=False):
-    """ Main algorithm described in our paper: Ours
+    """ Main algorithm described in our paper
 
     Args:
         X   (np.array): sample matrix
@@ -164,11 +164,20 @@ def compute_C(n, sum_Wk, dagness_pen, dagness_exp, gamma):
 
 def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
                     gamma, l1_pen, dagness_pen, dagness_exp):
-    """ Solves argmin f(W) + <grad g (Wk), W-Wk>
-                        + 1/gamma * Dh(W, Wk)
-
+    """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
+        with CVX
         this is only implemented for a specific penalty and kernel
+
+        Args:
+            s_mat (np.array): data matrix
+            Wk_plus_value (np.array): current iterate value for W+
+            Wk_minus_value (np.array): current iterate value for W-
+            gamma (float): Bregman iteration map param
+            l1_pen (float): lambda in paper
+            dagness_pen (float): mu in paper
+            dagness_exp (float): alpha in paper
     """
+
 
     n = s_mat.shape[1]
 
@@ -210,10 +219,18 @@ def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
 
 def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
                       gamma, l1_pen, dagness_pen, dagness_exp):
-    """ Solves argmin f(W) + <grad g (Wk), W-Wk>
-                        + 1/gamma * Dh(W, Wk)
-
+    """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
+        with MOSEK
         this is only implemented for a specific penalty and kernel
+
+        Args:
+            s_mat (np.array): data matrix
+            Wk_plus_value (np.array): current iterate value for W+
+            Wk_minus_value (np.array): current iterate value for W-
+            gamma (float): Bregman iteration map param
+            l1_pen (float): lambda in paper
+            dagness_pen (float): mu in paper
+            dagness_exp (float): alpha in paper
     """
 
     n = s_mat.shape[1]

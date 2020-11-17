@@ -10,7 +10,7 @@ except ImportError:
 
 def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=True, max_iter=500,
                     verbose=False, logging=False):
-    """ Main algorithm described in our paper: Ours^+
+    """ Main algorithm described in our paper: $Ours^+$
 
     Args:
         X   (np.array): sample matrix
@@ -141,10 +141,17 @@ def compute_C(n, Wk_value, dagness_pen, dagness_exp, gamma):
 
 def solve_subproblem_mosek(s_mat, Wk_value,
                            gamma, l1_pen, dagness_pen, dagness_exp):
-    """ Solves argmin g(W) + <grad f (Wk), W-Wk>
-                        + 1/gamma * Dh(W, Wk)
-
+    """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
+        with MOSEK
         this is only implemented for a specific penalty and kernel
+
+        Args:
+            s_mat (np.array): data matrix
+            Wk_value (np.array): current iterate value
+            gamma (float): Bregman iteration map param
+            l1_pen (float): lambda in paper
+            dagness_pen (float): mu in paper
+            dagness_exp (float): alpha in paper
     """
 
     n = s_mat.shape[1]
@@ -192,11 +199,18 @@ def solve_subproblem_mosek(s_mat, Wk_value,
 
 def solve_subproblem_cvxpy(s_mat, Wk_value,
                            gamma, l1_pen, dagness_pen, dagness_exp):
-    """ Solves argmin g(W) + <grad f (Wk), W-Wk>
-                        + 1/gamma * Dh(W, Wk)
-
+    """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
+        with CVXPY
         this is only implemented for a specific penalty and kernel
-    """
+
+        Args:
+            s_mat (np.array): data matrix
+            Wk_value (np.array): current iterate value
+            gamma (float): Bregman iteration map param
+            l1_pen (float): lambda in paper
+            dagness_pen (float): mu in paper
+            dagness_exp (float): alpha in paper
+        """
 
     n = s_mat.shape[1]
 
