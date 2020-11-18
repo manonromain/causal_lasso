@@ -3,6 +3,7 @@ Archives/
 .DS_Store
 .idea/*
 .ipynb_checkpoints/*
+examples/.ipynb_checkpoints/*
 __pycache__/*
 Brouillon*
 *.npy
