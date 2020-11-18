@@ -4,3 +4,4 @@ tqdm
 networkx
 cvxpy
 Mosek
+python-igraph
