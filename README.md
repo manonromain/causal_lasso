@@ -2,9 +2,15 @@
 
 This repository implements paper "A Bregman Method for Structure Learning on Sparse Directed Acyclic Graphs" by Manon Romain and Alexandre d'Aspremont.
 
-### Requirements
+### Install
+#### Though pip
 
-This package requires `numpy`, `scipy`, `tqdm`, `networkx` and `mosek`, installation can be done with `pip install -r docs/requirements.txt`.
+Run `pip install causal-lasso` from Terminal. 
+
+#### From sources
+
+Run `git clone https://github.com/manon643/causal_lasso.git`. Install dependencies though `pip install -r docs/requirements.txt`. 
+
 
 
 ### Solver 
@@ -32,4 +38,5 @@ W_est = lasso.fit(X)
 nx.draw(nx.DiGraph(W_est))
 ```
 
-A more detailed tutorial is available in `examples/tutorial.ipynb`.
+A more detailed tutorial with synthetic data is available in `examples/tutorial.ipynb`. 
+If you want to apply the algorithm to your own data, you should check out `examples/real_datasets.ipynb`
