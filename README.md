@@ -39,4 +39,4 @@ nx.draw(nx.DiGraph(W_est))
 ```
 
 A more detailed tutorial with synthetic data is available in `examples/tutorial.ipynb`. 
-If you want to apply the , you should check out `examples/real_datasets.ipynb`
+If you want to apply the algorithm to your own data, you should check out `examples/real_datasets.ipynb`
