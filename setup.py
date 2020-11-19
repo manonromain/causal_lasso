@@ -19,4 +19,5 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     python_requires='>=3.6',
+    install_requires=["numpy", "scipy", "tqdm", "networkx", "Mosek", "cvxpy", "python-igraph"]
 )
