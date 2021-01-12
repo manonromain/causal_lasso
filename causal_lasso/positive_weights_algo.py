@@ -2,6 +2,7 @@ import numpy as np
 import time
 from tqdm.autonotebook import tqdm
 from scipy.linalg import sqrtm
+import logging
 try:
     import mosek.fusion as msk
 except ImportError:
@@ -9,7 +10,7 @@ except ImportError:
 
 
 def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=True, max_iter=500,
-                    verbose=False, logging=False):
+                    verbose=False, logging_dict=False):
     """ Main algorithm described in our paper: $Ours^+$
 
     Args:
@@ -22,11 +23,11 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
         mosek   (bool): solver to use (false is cvxpy)
         max_iter (int): maximum number of iterations
         verbose (bool): prints objective value
-        logging (bool): if enabled, returns all objective values + additional info (useful for analysis)
+        logging_dict (bool): if enabled, returns all objective values + additional info (useful for analysis)
 
     Returns:
         Wk     (np.array): current iterate of weighted adj matrix
-        logging_np (dict): if logging is True, dict of metrics/info
+        logging_np (dict): if logging_dict is True, dict of metrics/info
     """
 
     m, n = X.shape
@@ -59,8 +60,8 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
         grad_hy_scalar_x_minus_y = n * dagness_exp * (1 + dagness_exp * norm_y) ** (n - 1) * product
         return dagness_pen * (n - 1) * (hWx - hWy - grad_hy_scalar_x_minus_y)
 
-    if logging:
-        logging_dict = {"dagness_exp": dagness_exp, "dagness_pen": dagness_pen, "l1_pen": l1_pen,  # constants
+    if logging_dict:
+        log_dict = {"dagness_exp": dagness_exp, "dagness_pen": dagness_pen, "l1_pen": l1_pen,  # constants
                         "time": [], "l2_error": [], "l1_val": [], "dag_constraint": [],
                         "nb_change_support": [], "support": []}
 
@@ -86,9 +87,9 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
                     next_W = solve_subproblem_mosek(s_mat, Wk,
                                                     gamma, l1_pen, dagness_pen, dagness_exp)
             except msk.SolutionError as e:
-                print(e)
+                logging.warning(e)
                 gamma = gamma / 2
-                print("Trying gamma smaller", it, gamma)
+                logging.warning("Trying gamma smaller", it, gamma)
                 it += 1
                 continue
 
@@ -107,24 +108,24 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
         l2_error_curr = 1/m * np.linalg.norm(X @ (np.eye(n) - Wk), "fro")**2
         dag_penalty_k = dag_penalty(Wk)
         # Logging
-        if logging:
+        if logging_dict:
             support = Wk > 0.5
-            logging_dict["time"].append(time.time() - start)
-            logging_dict["l2_error"].append(l2_error_curr)
-            logging_dict["dag_constraint"].append(dag_penalty_k/dagness_pen)
-            logging_dict["l1_val"].append(np.sum(Wk))
-            logging_dict["nb_change_support"].append(np.sum(prev_support ^ support))
-            logging_dict["support"].append(support.flatten())
+            log_dict["time"].append(time.time() - start)
+            log_dict["l2_error"].append(l2_error_curr)
+            log_dict["dag_constraint"].append(dag_penalty_k/dagness_pen)
+            log_dict["l1_val"].append(np.sum(Wk))
+            log_dict["nb_change_support"].append(np.sum(prev_support ^ support))
+            log_dict["support"].append(support.flatten())
             prev_support = support
         
         if verbose:
-            print("Objective value at iteration {}".format(it_nolips))
-            print(l2_error_curr + dag_penalty_k + l1_pen * np.sum(Wk))
+            logging.info("Objective value at iteration {}".format(it_nolips))
+            logging.info(l2_error_curr + dag_penalty_k + l1_pen * np.sum(Wk))
         it_nolips += 1
         pbar.update(1)
-    print("Done in", time.time() - start, "s and", it_nolips, "iterations")
-    if logging:
-        logging_np = {k: np.array(v) for k, v in logging_dict.items()}
+    logging.info("Done in", time.time() - start, "s and", it_nolips, "iterations")
+    if logging_dict:
+        logging_np = {k: np.array(v) for k, v in log_dict.items()}
         return Wk, logging_np
     else:
         return Wk, {}
@@ -230,7 +231,7 @@ def solve_subproblem_cvxpy(s_mat, Wk_value,
     prob = cp.Problem(cp.Minimize(obj), [cp.sum(W) >= n/((n-2)*dagness_exp)])
     prob.solve()
     if prob.status != "optimal":
-        print(prob.status)
+        logging.warning(prob.status)
     next_W = W.value
 
     # Correcting round-off errors
