@@ -1,10 +1,7 @@
 causal\_lasso package
 =====================
 
-Submodules
-----------
-
-causal\_lasso.general\_weights\_algo module
+General weights algorithm
 -------------------------------------------
 
 .. automodule:: causal_lasso.general_weights_algo
@@ -12,7 +9,7 @@ causal\_lasso.general\_weights\_algo module
    :undoc-members:
    :show-inheritance:
 
-causal\_lasso.positive\_weights\_algo module
+Positive weights algorithm
 --------------------------------------------
 
 .. automodule:: causal_lasso.positive_weights_algo
@@ -20,7 +17,7 @@ causal\_lasso.positive\_weights\_algo module
    :undoc-members:
    :show-inheritance:
 
-causal\_lasso.solver module
+Solver 
 ---------------------------
 
 .. automodule:: causal_lasso.solver

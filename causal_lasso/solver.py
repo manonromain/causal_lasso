@@ -1,6 +1,6 @@
 import numpy as np
-from causal_lasso.general_weights_algo import dyn_no_lips_gen
-from causal_lasso.positive_weights_algo import dyn_no_lips_pos
+import causal_lasso.general_weights_algo as gen_module
+import causal_lasso.positive_weights_algo as pos_module
 
 
 class CLSolver:
@@ -37,14 +37,15 @@ class CLSolver:
         n = X.shape[1]
         if self.version == "gen":
             W0_plus, W0_minus = np.random.random((n, n)), np.random.random((n, n))
-            W_out, log_dict = dyn_no_lips_gen(X, W0_plus, W0_minus, self.dagness_exp, self.dagness_pen, self.l1_pen,
-                                              eps=self.eps, mosek=self.mosek, max_iter=self.max_iter,
-                                              verbose=self.verbose, logging=self.logging)
+            W_out, log_dict = gen_module.dyn_no_lips_gen(X, W0_plus, W0_minus, self.dagness_exp, self.dagness_pen,
+                                                         self.l1_pen,
+                                                         eps=self.eps, mosek=self.mosek, max_iter=self.max_iter,
+                                                         verbose=self.verbose, logging_dict=self.logging)
         else:
             W0 = np.random.random((n, n))
-            W_out, log_dict = dyn_no_lips_pos(X, W0, self.dagness_exp, self.dagness_pen, self.l1_pen,
-                                              eps=self.eps, mosek=self.mosek, max_iter=self.max_iter,
-                                              verbose=self.verbose, logging=self.logging)
+            W_out, log_dict = pos_module.dyn_no_lips_pos(X, W0, self.dagness_exp, self.dagness_pen, self.l1_pen,
+                                                         eps=self.eps, mosek=self.mosek, max_iter=self.max_iter,
+                                                        verbose=self.verbose, logging_dict=self.logging)
         # Final thresholding
         W_out = np.where(np.abs(W_out) > 0.5, W_out, 0)
         self.sol = W_out
