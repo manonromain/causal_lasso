@@ -2,7 +2,7 @@ import numpy as np
 
 def compare_graphs(w_gt, w, verbose=True):
     """Compares two graphs and returns several metrics"""
-    thres_w = np.abs(w) > 0.5
+    thres_w = np.abs(w) > 0.0
     undirected_w = thres_w + thres_w.T
     if verbose:
         print("Number of edges in ground truth graph", np.sum(w_gt))

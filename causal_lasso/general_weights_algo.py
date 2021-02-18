@@ -19,8 +19,8 @@ except ImportError:
 
 
 
-def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=False, max_iter=200,
-                    verbose=False, logging_dict=False):
+def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="mosek", max_iter=200,
+                    logging_dict=False, device=None):
     """ Main algorithm described in our paper
 
     Args:
@@ -31,9 +31,8 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
         dagness_pen  (float): mu in paper
         l1_pen (float): lambda in paper
         eps    (float): sensivity for early stopping
-        mosek   (bool): solver to use (false is cvxpy)
+        solver   (str): solver to use
         max_iter (int): maximum number of iterations
-        verbose (bool): prints objective value
         logging_dict (bool): if enabled, returns all objective values + additional info (useful for analysis)
 
     Returns:
@@ -43,10 +42,10 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
     m, n = X.shape
     prev_support = np.abs(W0_plus - W0_minus) > 0.5
-    if m > n:
-        s_mat = 1 / m * np.real(sqrtm(X.T @ X))
-    else:
-        s_mat = 1 / np.sqrt(m) * X
+    #if m > n:
+    #    s_mat = 1 / m * np.real(sqrtm(X.T @ X))
+    #else:
+    s_mat = 1 / np.sqrt(m) * X
 
     # Functions
     def dag_penalty(W_plus, W_minus):
@@ -92,24 +91,24 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
     start = time.time()
     it_nolips = 0
     pbar = tqdm(desc="Causal Lasso", total=max_iter)
+    if solver == "cvxpylayers":
+        layer = layer_cvxtorch(s_mat, dagness_pen, dagness_exp)
     while (it_nolips < 2 or (np.abs((l2_error_prev - l2_error_curr)/l2_error_prev) >= eps)) and (it_nolips < max_iter):
         it = 0
         while True:
-            if gamma < 1:
+            if gamma < 1/2:
                 logging.warning("violated L-smad")
 
-            try:  # TODO more solvers
-                if mosek:
-                    next_W_plus, next_W_minus = bregman_map_mosek(s_mat, Wk_plus, Wk_minus,
-                                                                  gamma, l1_pen, dagness_pen, dagness_exp)
-                else:
-                    next_W_plus, next_W_minus = bregman_map_cvxtorch(s_mat, Wk_plus, Wk_minus,
-                                                                gamma, l1_pen, dagness_pen, dagness_exp)
-            except msk.SolutionError:
-                gamma = gamma / 2
-                it += 1
-                continue
-
+            # try:  # TODO more solvers
+            if solver == "mosek":
+                next_W_plus, next_W_minus = bregman_map_mosek(s_mat, Wk_plus, Wk_minus,
+                                                              gamma, l1_pen, dagness_pen, dagness_exp)
+            elif solver == "cvxpylayers":
+                next_W_plus, next_W_minus = apply_bregman_map_cvxtorch(layer, Wk_plus, Wk_minus,
+                                                            gamma, l1_pen, dagness_pen, dagness_exp)
+            else:
+                next_W_plus, next_W_minus = bregman_map_cvx(s_mat, Wk_plus, Wk_minus,
+                                                            gamma, l1_pen, dagness_pen, dagness_exp)
             # Sufficient decrease condition
             if dag_penalty(next_W_plus, next_W_minus) - dag_penalty(Wk_plus, Wk_minus) \
                - grad_f_scalar_H(Wk_plus, Wk_minus, next_W_plus - Wk_plus, next_W_minus - Wk_minus)  \
@@ -122,9 +121,9 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
         # Trying increasing step size
         gamma = min(2 * gamma, 10000)
 
-        # TODO delete?
+        # TODO delete
         if np.sum(next_W_minus + next_W_plus) < n/((n-2)*dagness_exp):
-             logging.warning("assertion false because of thresholding: iteration map may not be stable")
+            logging.warning("assertion false: iteration map may not be stable")
 
         # Compute current iterate
         Wk = next_W_plus - next_W_minus
@@ -147,13 +146,18 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
             log_dict["gammas"].append(gamma_k)
             prev_support = support
 
-        if it_nolips%10 == 0 and verbose:
+        if it_nolips % 10 == 0:
+            if it_nolips >= 50:
+                dagness_pen *= 10
             logging.info("Objective value at iteration {}".format(it_nolips))
             logging.info(l2_error_curr + dag_penalty_k + l1_pen * np.sum(Wk_plus + Wk_minus))
 
         it_nolips += 1
         pbar.update(1)
     logging.info("Done in", time.time() - start, "s and", it_nolips, "iterations")
+
+    # Thresholding
+    Wk[np.abs(Wk) < 0.3] = 0
     if logging_dict:
         logging_np = {k: np.array(v) for k, v in log_dict.items()}
         return Wk, logging_np
@@ -169,6 +173,7 @@ def compute_C(n, sum_Wk, dagness_pen, dagness_exp, inv_gamma):
     C -= inv_gamma * dagness_pen * (n - 1) * n * dagness_exp * \
         (1 + dagness_exp * sum_Wk_norm) ** (n - 1) * sum_Wk_normalized.T
     return C
+
 
 def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
                     gamma, l1_pen, dagness_pen, dagness_exp):
@@ -225,8 +230,7 @@ def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
         return next_W_plus, next_W_minus
 
 
-def bregman_map_cvxtorch(s_mat, Wk_plus_value, Wk_minus_value,
-                         gamma, l1_pen, dagness_pen, dagness_exp):
+def layer_cvxtorch(s_mat, dagness_pen, dagness_exp):
     """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
         with new CVXPY layers and PyTorch
         this is only implemented for a specific penalty and kernel
@@ -244,39 +248,62 @@ def bregman_map_cvxtorch(s_mat, Wk_plus_value, Wk_minus_value,
 
     n = s_mat.shape[1]
 
+    # Variables
     W_plus = cp.Variable((n, n), nonneg=True)
-    W_plus.value = Wk_plus_value
     W_minus = cp.Variable((n, n), nonneg=True)
+
+    # Parameters
     inv_gamma_param = cp.Parameter(nonneg=True)
     l1_pen_param = cp.Parameter(nonneg=True)
-    Wk_plus_param = cp.Parameter((n, n), nonneg=True)
-    Wk_minus_param = cp.Parameter((n, n), nonneg=True)
-    W_minus.value = Wk_minus_value
+    C_param = cp.Parameter((n,n))
     sum_W = W_plus + W_minus  # sum variable
 
     obj_ll = cp.norm(s_mat @ (np.eye(n) - W_plus + W_minus), "fro") ** 2
     obj_spars = l1_pen_param * cp.sum(W_plus + W_minus)
 
-    # Compute C
-    sum_Wk = Wk_plus_value + Wk_minus_value
-    C = compute_C(n, sum_Wk, dagness_pen, dagness_exp, inv_gamma_param)
-
-    obj_trace = cp.trace(C @ sum_W)
+    obj_trace = cp.trace(C_param @ sum_W)
     obj_kernel = inv_gamma_param * (dagness_pen * (n - 1) * (1 + dagness_exp * cp.norm(sum_W, "fro"))**n)
 
     obj = obj_ll + obj_spars + obj_trace + obj_kernel
     prob = cp.Problem(cp.Minimize(obj), [cp.sum(W_plus) + cp.sum(W_minus) >= n/((n-2)*dagness_exp)])
-    assert prob.is_dpp(), "{}{}{}{}".format((dagness_pen * (n - 1) * (1 + dagness_exp * cp.norm(sum_W, "fro"))**n).is_dpp())
+    assert prob.is_dpp(), "{}{}{}{}".format()
 
     #set_trace()
 
-    layer = CvxpyLayer(prob, parameters = [inv_gamma_param, l1_pen_param], variables = [W_plus, W_minus])
+    layer = CvxpyLayer(prob, parameters = [C_param, inv_gamma_param, l1_pen_param],
+                       variables = [W_plus, W_minus])
+
+    return layer
+
+
+def apply_bregman_map_cvxtorch(layer, Wk_plus_value, Wk_minus_value,
+                               gamma, l1_pen, dagness_pen, dagness_exp):
+    """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
+        with new CVXPY layers and PyTorch
+        this is only implemented for a specific penalty and kernel
+
+        Args:
+            s_mat (np.array): data matrix
+            Wk_plus_value (np.array): current iterate value for W+
+            Wk_minus_value (np.array): current iterate value for W-
+            gamma (float): Bregman iteration map param
+            l1_pen (float): lambda in paper
+            dagness_pen (float): mu in paper
+            dagness_exp (float): alpha in paper
+    """
+
+
+    n = Wk_plus_value.shape[0]
 
     #TODO allow GPU
-    torch_gamma = torch.tensor(1 / gamma)
-    torch_l1_pen = torch.tensor(l1_pen)
+    torch_gamma = torch.tensor(1 / gamma, dtype=torch.float32)
+    torch_l1_pen = torch.tensor(l1_pen, dtype=torch.float32)
+    # Compute C
+    sum_Wk = Wk_plus_value + Wk_minus_value
+    C = compute_C(n, sum_Wk, dagness_pen, dagness_exp, 1 / gamma)
+    torch_C = torch.tensor(C, dtype=torch.float32)
 
-    x_star = layer(torch_gamma, torch_l1_pen) #W_plus.value, W_minus.value
+    x_star = layer(torch_C, torch_gamma, torch_l1_pen)
     #set_trace()
     next_W_plus, next_W_minus = x_star[0].numpy(), x_star[1].numpy()
 
@@ -285,9 +312,15 @@ def bregman_map_cvxtorch(s_mat, Wk_plus_value, Wk_minus_value,
     tilde_sum = tilde_W_plus + tilde_W_minus
     #
     if np.sum(tilde_sum) >= n / ((n - 2) * dagness_exp):
+        # Thresholding
+        # tilde_W_plus[tilde_W_plus < 0.4] = 0
+        # tilde_W_minus[tilde_W_minus < 0.4] = 0
         return tilde_W_plus, tilde_W_minus
     else:
-        return np.maximum(next_W_plus, 0), np.maximum(next_W_minus, 0)
+        # Thresholding
+        # next_W_plus[next_W_plus < 0.4] = 0
+        # next_W_minus[next_W_minus < 0.4] = 0
+        return next_W_plus, next_W_minus
 
 
 def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
@@ -312,7 +345,7 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
     C = compute_C(n, sum_Wk, dagness_pen, dagness_exp, 1 / gamma)
     #
 
-    with msk.Model('model2') as M:
+    with msk.Model('model') as M:
         W_plus = M.variable('W_plus', [n, n], msk.Domain.greaterThan(0.))
         W_minus = M.variable('W_minus', [n, n], msk.Domain.greaterThan(0.))
         W_plus.setLevel(Wk_plus_value.flatten())
@@ -335,9 +368,16 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
         z2 = msk.Expr.mul(s_mat, msk.Expr.sub(msk.Matrix.eye(n), diff_W))
         M.constraint("rqc1", msk.Expr.vstack(t, .5, msk.Expr.flatten(z2)), msk.Domain.inRotatedQCone())
 
-        # sum(W) >= n/(n-2)dagness_exp
+        # sum(W) >= n/(n-2)dagness_exp # C_alpha
         normW1 = msk.Expr.sum(sum_W)
-        M.constraint("lin1", normW1, msk.Domain.greaterThan(n/((n-2)*dagness_exp)))
+        M.constraint("lin1", normW1, msk.Domain.greaterThan(1.01*n/((n-2)*dagness_exp)))
+
+        # Constrain diag to be zero
+        M.constraint(W_plus.diag(), msk.Domain.equalsTo(0.0))
+
+        # Constrain diag to be zero
+        M.constraint(W_minus.diag(), msk.Domain.equalsTo(0.0))
+
 
         # Set the objective function
         obj_tr = msk.Expr.dot(C.T, sum_W)
@@ -345,25 +385,66 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
         obj = msk.Expr.dot([1., 1., dagness_pen * (n - 1) / gamma, l1_pen], obj_vec)
 
         M.objective(msk.ObjectiveSense.Minimize, obj)
+        try:
+            M.solve()
+            M.selectedSolution(msk.SolutionType.Interior)
+            next_W_plus = M.getVariable('W_plus').level().reshape(n, n)
+            next_W_minus = M.getVariable('W_minus').level().reshape(n, n)
+        except msk.SolutionError:
+            print("stopped because of Solution Error")
+            return Wk_plus_value, Wk_minus_value
 
-        M.solve()
-        M.selectedSolution(msk.SolutionType.Interior)
 
-        next_W_plus = M.getVariable('W_plus').level().reshape(n, n)
-        next_W_minus = M.getVariable('W_minus').level().reshape(n, n)
+
 
     # compute w_tilde: getting rid of ambiguous edges
     tilde_W_plus = np.maximum(next_W_plus - next_W_minus, 0.0)
     tilde_W_minus = np.maximum(next_W_minus - next_W_plus, 0.0)
     tilde_sum = tilde_W_plus + tilde_W_minus
     # If we stay in the right space
+    # set_trace()
     if np.sum(tilde_sum) >= n/((n-2)*dagness_exp):
         # Thresholding
-        tilde_W_plus[tilde_W_plus < 0.4] = 0
-        tilde_W_minus[tilde_W_minus < 0.4] = 0
+        # tilde_W_plus[tilde_W_plus < 0.4] = 0
+        # tilde_W_minus[tilde_W_minus < 0.4] = 0
+        # logging.warning("reduced:{},{}?".format(np.sum(next_W_minus + next_W_plus)- np.sum(tilde_sum),
+        #                                            n / ((n - 2) * dagness_exp)))
         return tilde_W_plus, tilde_W_minus
     else:
         # Thresholding
-        next_W_plus[next_W_plus < 0.4] = 0
-        next_W_minus[next_W_minus < 0.4] = 0
+        # next_W_plus[next_W_plus < 0.4] = 0
+        # next_W_minus[next_W_minus < 0.4] = 0
+        # logging.warning("not reduced:{}>{}?".format(np.sum(next_W_minus + next_W_plus), n / ((n - 2) * dagness_exp)))
         return next_W_plus, next_W_minus
+
+
+def init_no_lips(s_mat, l1_pen):
+    """
+        Solves argmin g(W)
+        with CVX
+
+        Args:
+        s_mat(np.array): data  matrix
+        l1_pen(float): lambda in paper
+    """
+
+
+    n = s_mat.shape[1]
+
+    W_plus = cp.Variable((n, n), nonneg=True)
+    W_minus = cp.Variable((n, n), nonneg=True)
+    sum_W = W_plus + W_minus  # sum variable
+
+    obj_ll = cp.norm(s_mat @ (np.eye(n) - W_plus + W_minus), "fro") ** 2
+    obj_spars = l1_pen * cp.sum(W_plus + W_minus)
+
+    obj = obj_ll + obj_spars
+    prob = cp.Problem(cp.Minimize(obj))
+    prob.solve()
+
+    if prob.status != "optimal":
+        prob.solve(verbose=True)
+
+    next_W_plus, next_W_minus = W_plus.value, W_minus.value
+
+    return next_W_plus, next_W_minus

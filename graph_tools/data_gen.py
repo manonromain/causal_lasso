@@ -65,7 +65,7 @@ def simulate_parameter(adj_matrix, w_ranges):
 
 def sample_lin_scms(graph_type, noise_type, adj_matrix, nb_samples=1000,
                     weighted=False,
-                    w_ranges=((-2.0, -.5), (.5, 2.0))):
+                    w_ranges=[(-2, -.5), (.5, 2.0)]):
     """ Given a directed graph and a particular noise type, generates edge weights and samples
 
     Args:

@@ -3,14 +3,23 @@ import time
 from tqdm.autonotebook import tqdm
 from scipy.linalg import sqrtm
 import logging
+import cvxpy as cp
 try:
     import mosek.fusion as msk
 except ImportError:
     pass
 
+try:
+    import torch
+    from cvxpylayers.torch import CvxpyLayer
+except ImportError:
+    logging.info("If you want to use PyTorch CVXPY layers, you should install it first")
+    logging.info("using pip install torch cvxpylayers --user")
+    pass
 
-def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=True, max_iter=500,
-                    verbose=False, logging_dict=False):
+
+def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="mosek", max_iter=500,
+                    logging_dict=False, device=None):
     """ Main algorithm described in our paper: $Ours^+$
 
     Args:
@@ -20,9 +29,8 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
         dagness_pen (float): mu in paper
         l1_pen (float): lambda in paper
         eps    (float): sensivity for early stopping
-        mosek   (bool): solver to use (false is cvxpy)
+        solver   (string): solver to use (choices are cvxpy, cvxpylayers or mosek)
         max_iter (int): maximum number of iterations
-        verbose (bool): prints objective value
         logging_dict (bool): if enabled, returns all objective values + additional info (useful for analysis)
 
     Returns:
@@ -36,25 +44,38 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
         s_mat = np.real(sqrtm(np.cov(X.T, bias=True)))
     else:
         s_mat = 1 / np.sqrt(m) * X
-    prev_support = W0 > 0.5
 
     # Functions
     def dag_penalty(W):
-        return dagness_pen * np.trace(np.linalg.matrix_power(np.eye(n) + dagness_exp * W, n))
+        if solver == "cvxpylayers":
+            return dagness_pen * torch.trace(torch.matrix_power(torch.eye(n) + dagness_exp * W, n))
+        else:
+            return dagness_pen * np.trace(np.linalg.matrix_power(np.eye(n) + dagness_exp * W, n))
 
     def grad_f_scalar_H(W, H):
         """Returns <∇f(W), D>"""
-        powW = np.linalg.matrix_power(np.eye(n) + dagness_exp * W, n - 1)
-        return n * dagness_pen * dagness_exp * np.trace(powW @ H)
+        if solver == "cvxpylayers":
+            powW = torch.matrix_power(torch.eye(n) + dagness_exp * W, n - 1)
+            return n * dagness_pen * dagness_exp * torch.trace(torch.matmul(powW, H))
+        else:
+            powW = np.linalg.matrix_power(np.eye(n) + dagness_exp * W, n - 1)
+            return n * dagness_pen * dagness_exp * np.trace(powW @ H)
 
     def distance_kernel(Wx, Wy):
         """the kernel used is mu(n - 1)(1+beta||W||_F)^n"""
-        norm_y = np.linalg.norm(Wy, "fro")
-        Wy_normalized = Wy / norm_y
+        if solver == "cvxpylayers":
+            norm_y = torch.norm(Wy, "fro")
+            norm_x = torch.norm(Wx, "fro")
 
-        norm_x = np.linalg.norm(Wx, "fro")
-        product = np.trace(Wy_normalized.T @ (Wx - Wy))
+            Wy_normalized = Wy / norm_y
+            product = torch.trace(torch.matmul(Wy_normalized.T, Wx - Wy))
 
+        else:
+            norm_y = np.linalg.norm(Wy, "fro")
+            norm_x = np.linalg.norm(Wx, "fro")
+
+            Wy_normalized = Wy / norm_y
+            product = np.trace(Wy_normalized.T @ (Wx - Wy))
         hWx = (1 + dagness_exp * norm_x) ** n
         hWy = (1 + dagness_exp * norm_y) ** n
         grad_hy_scalar_x_minus_y = n * dagness_exp * (1 + dagness_exp * norm_y) ** (n - 1) * product
@@ -63,29 +84,45 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
     if logging_dict:
         log_dict = {"dagness_exp": dagness_exp, "dagness_pen": dagness_pen, "l1_pen": l1_pen,  # constants
                         "time": [], "l2_error": [], "l1_val": [], "dag_constraint": [],
-                        "nb_change_support": [], "support": []}
+                        "nb_change_support": [], "support": [], "gammas": []}
 
     # Constants
     gamma = 500
 
     # Init
-    Wk = W0
+    if solver == "cvxpylayers":
+        Wk = torch.tensor(W0, device=device)
+    else:
+        Wk = W0
+
+    previous_dag_penalty = dag_penalty(Wk)
+    prev_support = Wk > 0.5
     l2_error_curr, l2_error_prev = 0, 0
+
     it_nolips = 0
     start = time.time()
     pbar = tqdm(desc="Causal Lasso for positive weights", total=max_iter)
+
+    if solver == "cvxpylayers":
+        layer = create_cvxpylayer(s_mat, dagness_pen, dagness_exp)
+
+
+
     while (it_nolips < 2 or (np.abs((l2_error_prev - l2_error_curr)/l2_error_prev) >= eps)) and it_nolips < max_iter:
         # Implementing dynamic version of Dragomir et al. (2019)
         it = 0
         while it < 1000:
             # Solving Bregman iteration map
             try:
-                if not mosek:
-                    next_W = solve_subproblem_cvxpy(s_mat, Wk,
-                                                    gamma, l1_pen, dagness_pen, dagness_exp)
-                else:
+                if solver == "cvxpylayers":
+                    next_W = solve_subproblem_cvxpylayer(layer, Wk, l1_pen, dagness_pen, dagness_exp, gamma)
+                elif solver == "mosek":
                     next_W = solve_subproblem_mosek(s_mat, Wk,
                                                     gamma, l1_pen, dagness_pen, dagness_exp)
+                else:
+                    next_W = solve_subproblem_cvxpy(s_mat, Wk,
+                                                    gamma, l1_pen, dagness_pen, dagness_exp)
+
             except msk.SolutionError as e:
                 logging.warning(e)
                 gamma = gamma / 2
@@ -94,33 +131,35 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, mosek=Tru
                 continue
 
             # Sufficient decrease condition
-            if dag_penalty(next_W) - dag_penalty(Wk) - grad_f_scalar_H(Wk, next_W - Wk)  \
+            current_dag_penalty = dag_penalty(next_W)
+            if current_dag_penalty - previous_dag_penalty - grad_f_scalar_H(Wk, next_W - Wk)  \
                > 1 / gamma * distance_kernel(next_W, Wk):
                 gamma = gamma / 2
             else:
                 break
-
-        gamma = min(2 * gamma, 2000)
+        gamma_k = gamma
+        gamma = min(2 * gamma, 10000)
 
         Wk = next_W
+        previous_dag_penalty = current_dag_penalty
         
         l2_error_prev = l2_error_curr
         l2_error_curr = 1/m * np.linalg.norm(X @ (np.eye(n) - Wk), "fro")**2
-        dag_penalty_k = dag_penalty(Wk)
         # Logging
         if logging_dict:
             support = Wk > 0.5
             log_dict["time"].append(time.time() - start)
             log_dict["l2_error"].append(l2_error_curr)
-            log_dict["dag_constraint"].append(dag_penalty_k/dagness_pen)
+            log_dict["dag_constraint"].append(current_dag_penalty/dagness_pen)
             log_dict["l1_val"].append(np.sum(Wk))
             log_dict["nb_change_support"].append(np.sum(prev_support ^ support))
             log_dict["support"].append(support.flatten())
+            log_dict["gammas"].append(gamma_k)
             prev_support = support
         
-        if verbose:
-            logging.info("Objective value at iteration {}".format(it_nolips))
-            logging.info(l2_error_curr + dag_penalty_k + l1_pen * np.sum(Wk))
+
+        logging.info("Objective value at iteration {}".format(it_nolips))
+        logging.info(l2_error_curr + current_dag_penalty + l1_pen * np.sum(Wk))
         it_nolips += 1
         pbar.update(1)
     logging.info("Done in", time.time() - start, "s and", it_nolips, "iterations")
@@ -177,9 +216,8 @@ def solve_subproblem_mosek(s_mat, Wk_value,
         z2 = msk.Expr.mul(s_mat, msk.Expr.sub(msk.Matrix.eye(n), W))
         M.constraint("rqc1", msk.Expr.vstack(t, .5, msk.Expr.flatten(z2)), msk.Domain.inRotatedQCone())
 
-        # # sum(A) >= n/(n-2)dagness_exp
-        # normA1 = msk.Expr.sum(W)
-        # M.constraint("lin1", normA1, msk.Domain.greaterThan(n / ((n - 2) * dagness_exp)))
+        # Constrain diag to be zero
+        M.constraint(W.diag(), msk.Domain.equalsTo(0.0))
 
         # Set the objective function
         obj_spars = msk.Expr.sum(W)
@@ -228,7 +266,7 @@ def solve_subproblem_cvxpy(s_mat, Wk_value,
     obj_kernel = dagness_pen * (n - 1) / gamma * (1 + dagness_exp * cp.norm(W, "fro")) ** n
     obj = obj_ll + obj_spars + obj_tr + obj_kernel
 
-    prob = cp.Problem(cp.Minimize(obj), [cp.sum(W) >= n/((n-2)*dagness_exp)])
+    prob = cp.Problem(cp.Minimize(obj), [cp.diag(W)==np.zeros(n)])
     prob.solve()
     if prob.status != "optimal":
         logging.warning(prob.status)
@@ -237,4 +275,89 @@ def solve_subproblem_cvxpy(s_mat, Wk_value,
     # Correcting round-off errors
     next_W = np.maximum(next_W, 0.0)
     return next_W
+
+
+def create_cvxpylayer(s_mat, dagness_pen, dagness_exp):
+    """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
+        with CVXPY
+        this is only implemented for a specific penalty and kernel
+
+        Args:
+            s_mat (np.array): data matrix
+            Wk_value (np.array): current iterate value
+            gamma (float): Bregman iteration map param
+            l1_pen (float): lambda in paper
+            dagness_pen (float): mu in paper
+            dagness_exp (float): alpha in paper
+        """
+
+    n = s_mat.shape[1]
+
+    # Compute C = grad g - 1/gamma grad h
+    C_param = cp.Parameter((n,n))
+    inv_gamma_param = cp.Parameter(nonneg=True)
+    l1_pen_param = cp.Parameter(nonneg=True)
+
+    W = cp.Variable([n, n], nonneg=True)
+
+    # Set the objective function
+    obj_ll = cp.norm(s_mat @ (np.eye(n) - W), "fro")**2
+    obj_spars = l1_pen_param * cp.sum(W)
+    obj_tr = cp.trace(C_param @ W)
+    obj_kernel = dagness_pen * (n - 1) * inv_gamma_param * (1 + dagness_exp * cp.norm(W, "fro")) ** n
+    obj = obj_ll + obj_spars + obj_tr + obj_kernel
+
+    prob = cp.Problem(cp.Minimize(obj), [cp.diag(W)==np.zeros(n)])
+    assert prob.is_dpp(), "".format()
+
+    # set_trace()
+
+    layer = CvxpyLayer(prob, parameters=[C_param, inv_gamma_param, l1_pen_param],
+                       variables=[W])
+    return layer
+
+
+
+def solve_subproblem_cvxpylayer(layer, Wk_value, l1_pen, dagness_pen, dagness_exp, gamma):
+    n = Wk_value.shape[0]
+    C = compute_C(n, Wk_value, dagness_pen, dagness_exp, gamma)
+    torch_C = torch.tensor(C, dtype=torch.float64)
+    torch_inv_gamma = torch.tensor(1/gamma, dtype=torch.float64)
+    torch_l1_pen = torch.tensor(l1_pen, dtype=torch.float64)
+
+    next_W, = layer(torch_C, torch_inv_gamma, torch_l1_pen)
+    return next_W.numpy()
+
+
+def init_nolips(s_mat, l1_pen):
+    """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
+        with CVXPY
+        this is only implemented for a specific penalty and kernel
+
+        Args:
+            s_mat (np.array): data matrix
+            l1_pen (float): lambda in paper
+        """
+
+    n = s_mat.shape[1]
+
+    W = cp.Variable([n, n], nonneg=True)
+
+    # Set the objective function
+    obj_ll = cp.norm(s_mat @ (np.eye(n) - W), "fro") ** 2
+    obj_spars = l1_pen * cp.sum(W)
+    obj = obj_ll + obj_spars
+
+    prob = cp.Problem(cp.Minimize(obj), [cp.diag(W) == np.zeros(n)])
+    prob.solve()
+    if prob.status != "optimal":
+        logging.warning(prob.status)
+    next_W = W.value
+
+    # Correcting round-off errors
+    next_W = np.maximum(next_W, 0.0)
+    return next_W
+
+
+
 
