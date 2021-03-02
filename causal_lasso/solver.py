@@ -57,7 +57,7 @@ class CLSolver:
                 W0 = np.random.random((n, n))
             W_out, log_dict = pos_module.dyn_no_lips_pos(X, W0, self.dagness_exp, self.dagness_pen, self.l1_pen,
                                                          eps=self.eps, solver=self.solver, max_iter=self.max_iter,
-                                                        verbose=self.verbose, logging_dict=self.logging,
+                                                         logging_dict=self.logging,
                                                          device=self.device)
         # Final thresholding
         W_out = np.where(np.abs(W_out) > 0.5, W_out, 0)
