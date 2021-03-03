@@ -18,7 +18,7 @@ except ImportError:
     pass
 
 
-def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="mosek", max_iter=500,
+def dyn_no_lips_pos(X, W0, degree_poly, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="mosek", max_iter=500,
                     logging_dict=False, device=None):
     """ Main algorithm described in our paper: $Ours^+$
 
@@ -48,17 +48,17 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="m
     # Functions
     def dag_penalty(W):
         if solver == "cvxpylayers":
-            return dagness_pen * torch.trace(torch.matrix_power(torch.eye(n) + dagness_exp * W, n))
+            return dagness_pen * torch.trace(torch.matrix_power(torch.eye(n) + dagness_exp * W, degree_poly))
         else:
-            return dagness_pen * np.trace(np.linalg.matrix_power(np.eye(n) + dagness_exp * W, n))
+            return dagness_pen * np.trace(np.linalg.matrix_power(np.eye(n) + dagness_exp * W, degree_poly))
 
     def grad_f_scalar_H(W, H):
         """Returns <∇f(W), D>"""
         if solver == "cvxpylayers":
-            powW = torch.matrix_power(torch.eye(n) + dagness_exp * W, n - 1)
+            powW = torch.matrix_power(torch.eye(n) + dagness_exp * W, degree_poly - 1)
             return n * dagness_pen * dagness_exp * torch.trace(torch.matmul(powW, H))
         else:
-            powW = np.linalg.matrix_power(np.eye(n) + dagness_exp * W, n - 1)
+            powW = np.linalg.matrix_power(np.eye(n) + dagness_exp * W, degree_poly - 1)
             return n * dagness_pen * dagness_exp * np.trace(powW @ H)
 
     def distance_kernel(Wx, Wy):
@@ -76,10 +76,10 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="m
 
             Wy_normalized = Wy / norm_y
             product = np.trace(Wy_normalized.T @ (Wx - Wy))
-        hWx = (1 + dagness_exp * norm_x) ** n
-        hWy = (1 + dagness_exp * norm_y) ** n
-        grad_hy_scalar_x_minus_y = n * dagness_exp * (1 + dagness_exp * norm_y) ** (n - 1) * product
-        return dagness_pen * (n - 1) * (hWx - hWy - grad_hy_scalar_x_minus_y)
+        hWx = (1 + dagness_exp * norm_x) ** degree_poly
+        hWy = (1 + dagness_exp * norm_y) ** degree_poly
+        grad_hy_scalar_x_minus_y = degree_poly * dagness_exp * (1 + dagness_exp * norm_y) ** (degree_poly - 1) * product
+        return dagness_pen * (degree_poly - 1) * (hWx - hWy - grad_hy_scalar_x_minus_y)
 
     if logging_dict:
         log_dict = {"dagness_exp": dagness_exp, "dagness_pen": dagness_pen, "l1_pen": l1_pen,  # constants
@@ -106,8 +106,14 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="m
     if solver == "cvxpylayers":
         layer = create_cvxpylayer(s_mat, dagness_pen, dagness_exp)
 
+    # DEBUG
+    def phi(W):
+        g = np.linalg.norm(s_mat @ (np.eye(n) - W), "fro")**2 + l1_pen * np.sum(W)
+        f = dag_penalty(W)
+        return f, g
 
 
+    #####
     while (it_nolips < 2 or (np.abs((l2_error_prev - l2_error_curr)/l2_error_prev) >= eps)) and it_nolips < max_iter:
         # Implementing dynamic version of Dragomir et al. (2019)
         it = 0
@@ -115,12 +121,13 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="m
             # Solving Bregman iteration map
             try:
                 if solver == "cvxpylayers":
-                    next_W = solve_subproblem_cvxpylayer(layer, Wk, l1_pen, dagness_pen, dagness_exp, gamma)
+                    next_W = solve_subproblem_cvxpylayer(layer, Wk, degree_poly,
+                                                         l1_pen, dagness_pen, dagness_exp, gamma)
                 elif solver == "mosek":
-                    next_W = solve_subproblem_mosek(s_mat, Wk,
+                    next_W = solve_subproblem_mosek(s_mat, Wk, degree_poly,
                                                     gamma, l1_pen, dagness_pen, dagness_exp)
                 else:
-                    next_W = solve_subproblem_cvxpy(s_mat, Wk,
+                    next_W = solve_subproblem_cvxpy(s_mat, Wk, degree_poly,
                                                     gamma, l1_pen, dagness_pen, dagness_exp)
 
             except msk.SolutionError as e:
@@ -145,12 +152,14 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="m
         
         l2_error_prev = l2_error_curr
         l2_error_curr = 1/m * np.linalg.norm(X @ (np.eye(n) - Wk), "fro")**2
+        fk, gk = phi(Wk)
         # Logging
         if logging_dict:
             support = Wk > 0.5
             log_dict["time"].append(time.time() - start)
             log_dict["l2_error"].append(l2_error_curr)
             log_dict["dag_constraint"].append(current_dag_penalty/dagness_pen)
+            print("Current phi:", fk + gk, fk, gk)
             log_dict["l1_val"].append(np.sum(Wk))
             log_dict["nb_change_support"].append(np.sum(prev_support ^ support))
             log_dict["support"].append(support.flatten())
@@ -159,7 +168,7 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="m
         
 
         logging.info("Objective value at iteration {}".format(it_nolips))
-        logging.info(l2_error_curr + current_dag_penalty + l1_pen * np.sum(Wk))
+        logging.info(fk + gk)
         it_nolips += 1
         pbar.update(1)
     logging.info("Done in", time.time() - start, "s and", it_nolips, "iterations")
@@ -170,16 +179,16 @@ def dyn_no_lips_pos(X, W0, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="m
         return Wk, {}
 
 
-def compute_C(n, Wk_value, dagness_pen, dagness_exp, gamma):
+def compute_C(n, Wk_value, degree_poly, dagness_pen, dagness_exp, gamma):
     # Compute C = grad f - 1/gamma grad h
     Wk_norm = np.linalg.norm(Wk_value, "fro")
     Wk_normalized = Wk_value / Wk_norm
-    C = dagness_pen * n * dagness_exp * np.linalg.matrix_power(np.eye(n) + dagness_exp * Wk_value, n - 1)
-    C -= 1/gamma * dagness_pen * (n - 1) * n * dagness_exp * (1 + dagness_exp * Wk_norm) ** (n - 1) * Wk_normalized.T
+    C = dagness_pen * degree_poly * dagness_exp * np.linalg.matrix_power(np.eye(n) + dagness_exp * Wk_value, degree_poly - 1)
+    C -= 1/gamma * dagness_pen * (degree_poly - 1) * degree_poly * dagness_exp * (1 + dagness_exp * Wk_norm) ** (degree_poly - 1) * Wk_normalized.T
     return C
 
 
-def solve_subproblem_mosek(s_mat, Wk_value,
+def solve_subproblem_mosek(s_mat, Wk_value, degree_poly,
                            gamma, l1_pen, dagness_pen, dagness_exp):
     """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
         with MOSEK
@@ -196,7 +205,7 @@ def solve_subproblem_mosek(s_mat, Wk_value,
 
     n = s_mat.shape[1]
 
-    C = compute_C(n, Wk_value, dagness_pen, dagness_exp, gamma)
+    C = compute_C(n, Wk_value, degree_poly, dagness_pen, dagness_exp, gamma)
 
     with msk.Model('model') as M:
         W = M.variable('W', [n, n], msk.Domain.greaterThan(0.))
@@ -209,8 +218,8 @@ def solve_subproblem_mosek(s_mat, Wk_value,
         z1 = msk.Expr.vstack([msk.Expr.sub(s1, 1.), msk.Expr.mul(dagness_exp, msk.Var.flatten(W))])
         M.constraint("qc1", z1, msk.Domain.inQCone())
 
-        # s1 <= s^{1/n}
-        M.constraint(msk.Expr.vstack(s, 1.0, s1), msk.Domain.inPPowerCone(1 / n))
+        # s1 <= s^{1/degree_poly}
+        M.constraint(msk.Expr.vstack(s, 1.0, s1), msk.Domain.inPPowerCone(1 / degree_poly))
 
         # t >= ||S(I-W)||^2
         z2 = msk.Expr.mul(s_mat, msk.Expr.sub(msk.Matrix.eye(n), W))
@@ -223,7 +232,7 @@ def solve_subproblem_mosek(s_mat, Wk_value,
         obj_spars = msk.Expr.sum(W)
         obj_tr = msk.Expr.dot(C.T, W)
         obj_vec = msk.Expr.vstack([t, obj_tr, s, obj_spars])
-        obj = msk.Expr.dot([1., 1., dagness_pen * (n - 1) / gamma, l1_pen], obj_vec)
+        obj = msk.Expr.dot([1., 1., dagness_pen * (degree_poly - 1) / gamma, l1_pen], obj_vec)
 
         M.objective(msk.ObjectiveSense.Minimize, obj)
         M.solve()
@@ -236,7 +245,7 @@ def solve_subproblem_mosek(s_mat, Wk_value,
     return next_W
 
 
-def solve_subproblem_cvxpy(s_mat, Wk_value,
+def solve_subproblem_cvxpy(s_mat, Wk_value, degree_poly,
                            gamma, l1_pen, dagness_pen, dagness_exp):
     """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
         with CVXPY
@@ -254,7 +263,7 @@ def solve_subproblem_cvxpy(s_mat, Wk_value,
     n = s_mat.shape[1]
 
     # Compute C = grad g - 1/gamma grad h
-    C = compute_C(n, Wk_value, dagness_pen, dagness_exp, gamma)
+    C = compute_C(n, Wk_value, degree_poly, dagness_pen, dagness_exp, gamma)
 
     W = cp.Variable([n, n], nonneg=True)
     W.value = Wk_value
@@ -263,10 +272,10 @@ def solve_subproblem_cvxpy(s_mat, Wk_value,
     obj_ll = cp.norm(s_mat @ (np.eye(n) - W), "fro")**2
     obj_spars = l1_pen * cp.sum(W)
     obj_tr = cp.trace(C @ W)
-    obj_kernel = dagness_pen * (n - 1) / gamma * (1 + dagness_exp * cp.norm(W, "fro")) ** n
+    obj_kernel = dagness_pen * (degree_poly - 1) / gamma * (1 + dagness_exp * cp.norm(W, "fro")) ** degree_poly
     obj = obj_ll + obj_spars + obj_tr + obj_kernel
 
-    prob = cp.Problem(cp.Minimize(obj), [cp.diag(W)==np.zeros(n)])
+    prob = cp.Problem(cp.Minimize(obj), [cp.diag(W) == np.zeros(n)])
     prob.solve()
     if prob.status != "optimal":
         logging.warning(prob.status)
@@ -307,7 +316,7 @@ def create_cvxpylayer(s_mat, dagness_pen, dagness_exp):
     obj_kernel = dagness_pen * (n - 1) * inv_gamma_param * (1 + dagness_exp * cp.norm(W, "fro")) ** n
     obj = obj_ll + obj_spars + obj_tr + obj_kernel
 
-    prob = cp.Problem(cp.Minimize(obj), [cp.diag(W)==np.zeros(n)])
+    prob = cp.Problem(cp.Minimize(obj), [cp.diag(W) == np.zeros(n)])
     assert prob.is_dpp(), "".format()
 
     # set_trace()
@@ -318,9 +327,9 @@ def create_cvxpylayer(s_mat, dagness_pen, dagness_exp):
 
 
 
-def solve_subproblem_cvxpylayer(layer, Wk_value, l1_pen, dagness_pen, dagness_exp, gamma):
+def solve_subproblem_cvxpylayer(layer, Wk_value, degree_poly, l1_pen, dagness_pen, dagness_exp, gamma):
     n = Wk_value.shape[0]
-    C = compute_C(n, Wk_value, dagness_pen, dagness_exp, gamma)
+    C = compute_C(n, Wk_value, degree_poly, dagness_pen, dagness_exp, gamma)
     torch_C = torch.tensor(C, dtype=torch.float64)
     torch_inv_gamma = torch.tensor(1/gamma, dtype=torch.float64)
     torch_l1_pen = torch.tensor(l1_pen, dtype=torch.float64)

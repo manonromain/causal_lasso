@@ -19,7 +19,7 @@ except ImportError:
 
 
 
-def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="mosek", max_iter=200,
+def dyn_no_lips_gen(X, W0_plus, W0_minus, degree_poly, dagness_exp, dagness_pen, l1_pen, eps=1e-4, solver="mosek", max_iter=200,
                     logging_dict=False, device=None):
     """ Main algorithm described in our paper
 
@@ -42,22 +42,22 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
     m, n = X.shape
     prev_support = np.abs(W0_plus - W0_minus) > 0.5
-    #if m > n:
-    #    s_mat = 1 / m * np.real(sqrtm(X.T @ X))
-    #else:
-    s_mat = 1 / np.sqrt(m) * X
+    if m > n:
+        s_mat = 1 / m * np.real(sqrtm(X.T @ X))
+    else:
+        s_mat = 1 / np.sqrt(m) * X
 
     # Functions
     def dag_penalty(W_plus, W_minus):
         sum_W = W_plus + W_minus
-        return dagness_pen * np.trace(np.linalg.matrix_power(np.eye(n) + dagness_exp * sum_W, n))
+        return dagness_pen * np.trace(np.linalg.matrix_power(np.eye(n) + dagness_exp * sum_W, degree_poly))
 
     def grad_f_scalar_H(W_plus, W_minus, H_plus, H_minus):
         """Returns <∇f(W), D>"""
         sum_W = W_plus + W_minus
         sum_H = H_plus + H_minus
-        powW = np.linalg.matrix_power(np.eye(n) + dagness_exp * sum_W, n - 1)
-        return n * dagness_pen * dagness_exp * np.trace(powW @ sum_H)
+        powW = np.linalg.matrix_power(np.eye(n) + dagness_exp * sum_W, degree_poly - 1)
+        return degree_poly * dagness_pen * dagness_exp * np.trace(powW @ sum_H)
 
     def distance_kernel(Wx_plus, Wx_minus, Wy_plus, Wy_minus):
         """
@@ -70,10 +70,11 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
         norm_x = np.linalg.norm(sum_x, "fro")
         product = np.trace(sum_Wy_normalized.T @ (sum_x - sum_y))
 
-        hWx = (1 + dagness_exp * norm_x) ** n
-        hWy = (1 + dagness_exp * norm_y) ** n
-        grad_hy_scalar_x_minus_y = n * dagness_exp * (1 + dagness_exp * norm_y) ** (n - 1) * product
-        return dagness_pen * (n - 1) * (hWx - hWy - grad_hy_scalar_x_minus_y)
+        hWx = (1 + dagness_exp * norm_x) ** degree_poly
+        hWy = (1 + dagness_exp * norm_y) ** degree_poly
+        grad_hy_scalar_x_minus_y = degree_poly * dagness_exp * (1 + dagness_exp * norm_y) ** (degree_poly - 1) * product
+        assert hWx >= hWy + grad_hy_scalar_x_minus_y - 1e-15, (hWx - hWy - grad_hy_scalar_x_minus_y)
+        return dagness_pen * (degree_poly - 1) * (hWx - hWy - grad_hy_scalar_x_minus_y)
 
     if logging_dict:
         log_dict = {"dagness_exp": dagness_exp, "dagness_pen": dagness_pen, "l1_pen": l1_pen, # constants
@@ -93,6 +94,16 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
     pbar = tqdm(desc="Causal Lasso", total=max_iter)
     if solver == "cvxpylayers":
         layer = layer_cvxtorch(s_mat, dagness_pen, dagness_exp)
+
+    ## DEBUG
+
+    def phi(W_plus, W_minus):
+        g = np.linalg.norm(s_mat @ (np.eye(n) - W_plus + W_minus), "fro") ** 2 + l1_pen * np.sum(W_plus + W_minus)
+        f = dag_penalty(W_plus, W_minus)
+        return f, g
+
+    ###
+    fk, gk = phi(Wk_plus, Wk_minus)
     while (it_nolips < 2 or (np.abs((l2_error_prev - l2_error_curr)/l2_error_prev) >= eps)) and (it_nolips < max_iter):
         it = 0
         while True:
@@ -101,13 +112,13 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
 
             # try:  # TODO more solvers
             if solver == "mosek":
-                next_W_plus, next_W_minus = bregman_map_mosek(s_mat, Wk_plus, Wk_minus,
+                next_W_plus, next_W_minus = bregman_map_mosek(s_mat, Wk_plus, Wk_minus, degree_poly,
                                                               gamma, l1_pen, dagness_pen, dagness_exp)
             elif solver == "cvxpylayers":
-                next_W_plus, next_W_minus = apply_bregman_map_cvxtorch(layer, Wk_plus, Wk_minus,
+                next_W_plus, next_W_minus = apply_bregman_map_cvxtorch(layer, Wk_plus, Wk_minus, degree_poly,
                                                             gamma, l1_pen, dagness_pen, dagness_exp)
             else:
-                next_W_plus, next_W_minus = bregman_map_cvx(s_mat, Wk_plus, Wk_minus,
+                next_W_plus, next_W_minus = bregman_map_cvx(s_mat, Wk_plus, Wk_minus, degree_poly,
                                                             gamma, l1_pen, dagness_pen, dagness_exp)
             # Sufficient decrease condition
             if dag_penalty(next_W_plus, next_W_minus) - dag_penalty(Wk_plus, Wk_minus) \
@@ -122,15 +133,23 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
         gamma = min(2 * gamma, 10000)
 
         # TODO delete
-        if np.sum(next_W_minus + next_W_plus) < n/((n-2)*dagness_exp):
+        if np.sum(next_W_minus + next_W_plus) < n/((degree_poly - 2)*dagness_exp):
             logging.warning("assertion false: iteration map may not be stable")
 
+        next_fk, next_gk = phi(next_W_plus, next_W_minus)
+
+        assert next_gk + grad_f_scalar_H(Wk_plus, Wk_minus, next_W_plus - Wk_plus, next_W_minus - Wk_minus) +\
+            1/gamma_k*distance_kernel(Wk_plus, Wk_minus, next_W_plus, next_W_minus) <= gk
+
+        fk, gk = next_fk, next_gk
         # Compute current iterate
         Wk = next_W_plus - next_W_minus
         Wk_plus, Wk_minus = next_W_plus, next_W_minus
         l2_error_prev = l2_error_curr
         l2_error_curr = np.linalg.norm(s_mat @ (np.eye(n) - next_W_plus + next_W_minus), "fro")**2
         dag_penalty_k = dag_penalty(Wk_plus, Wk_minus)
+
+
 
         if logging_dict:
             support = np.abs(Wk) > 0.5
@@ -139,6 +158,8 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
             log_dict["l2_error"].append(l2_error_curr)
             log_dict["dag_constraint"].append(dag_penalty_k/dagness_pen)
             log_dict["l1_val"].append(np.sum(next_W_plus) + np.sum(next_W_minus))
+
+            print("Current phi:", fk + gk)
             log_dict["nb_change_support"].append(np.sum(support ^ prev_support))
             log_dict["support"].append(support.flatten())
             log_dict["support_pos"].append((Wk > 0.5).flatten())
@@ -150,7 +171,7 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
             if it_nolips >= 50:
                 dagness_pen *= 10
             logging.info("Objective value at iteration {}".format(it_nolips))
-            logging.info(l2_error_curr + dag_penalty_k + l1_pen * np.sum(Wk_plus + Wk_minus))
+            logging.info(fk + gk)
 
         it_nolips += 1
         pbar.update(1)
@@ -165,17 +186,17 @@ def dyn_no_lips_gen(X, W0_plus, W0_minus, dagness_exp, dagness_pen, l1_pen, eps=
         return Wk, {}
 
 
-def compute_C(n, sum_Wk, dagness_pen, dagness_exp, inv_gamma):
+def compute_C(n, sum_Wk, degree_poly, dagness_pen, dagness_exp, inv_gamma):
     sum_Wk_norm = np.linalg.norm(sum_Wk, "fro")
     sum_Wk_normalized = sum_Wk / sum_Wk_norm
     # C = grad f - 1/gamma grad h
-    C = dagness_pen * n * dagness_exp * np.linalg.matrix_power(np.eye(n) + dagness_exp * sum_Wk, n - 1)
-    C -= inv_gamma * dagness_pen * (n - 1) * n * dagness_exp * \
-        (1 + dagness_exp * sum_Wk_norm) ** (n - 1) * sum_Wk_normalized.T
+    C = dagness_pen * degree_poly * dagness_exp * np.linalg.matrix_power(np.eye(n) + dagness_exp * sum_Wk, degree_poly - 1)
+    C -= inv_gamma * dagness_pen * (n - 1) * degree_poly * dagness_exp * \
+        (1 + dagness_exp * sum_Wk_norm) ** (degree_poly - 1) * sum_Wk_normalized.T
     return C
 
 
-def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
+def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value, degree_poly,
                     gamma, l1_pen, dagness_pen, dagness_exp):
     """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
         with CVX
@@ -205,13 +226,13 @@ def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
 
     # Compute C
     sum_Wk = Wk_plus_value + Wk_minus_value
-    C = compute_C(n, sum_Wk, dagness_pen, dagness_exp, 1/gamma)
+    C = compute_C(n, sum_Wk, degree_poly, dagness_pen, dagness_exp, 1/gamma)
 
     obj_trace = cp.trace(C @ sum_W)
-    obj_kernel = 1 / gamma * dagness_pen * (n - 1) * (1 + dagness_exp * cp.norm(sum_W, "fro"))**n
+    obj_kernel = 1 / gamma * dagness_pen * (degree_poly - 1) * (1 + dagness_exp * cp.norm(sum_W, "fro"))**degree_poly
 
     obj = obj_ll + obj_spars + obj_trace + obj_kernel
-    prob = cp.Problem(cp.Minimize(obj), [cp.sum(W_plus) + cp.sum(W_minus) >= n/((n-2)*dagness_exp)])
+    prob = cp.Problem(cp.Minimize(obj), [cp.sum(W_plus) + cp.sum(W_minus) >= n/((degree_poly-2)*dagness_exp)])
     prob.solve()
 
     if prob.status != "optimal":
@@ -224,7 +245,7 @@ def bregman_map_cvx(s_mat, Wk_plus_value, Wk_minus_value,
     tilde_W_minus = np.maximum(next_W_minus - next_W_plus, 0.0)
     tilde_sum = tilde_W_plus + tilde_W_minus
     #
-    if np.sum(tilde_sum) >= n / ((n - 2) * dagness_exp):
+    if np.sum(tilde_sum) >= n / ((degree_poly - 2) * dagness_exp):
         return tilde_W_plus, tilde_W_minus
     else:
         return next_W_plus, next_W_minus
@@ -245,7 +266,7 @@ def layer_cvxtorch(s_mat, dagness_pen, dagness_exp):
             dagness_exp (float): alpha in paper
     """
 
-
+    raise NotImplementedError
     n = s_mat.shape[1]
 
     # Variables
@@ -255,14 +276,14 @@ def layer_cvxtorch(s_mat, dagness_pen, dagness_exp):
     # Parameters
     inv_gamma_param = cp.Parameter(nonneg=True)
     l1_pen_param = cp.Parameter(nonneg=True)
-    C_param = cp.Parameter((n,n))
+    C_param = cp.Parameter((n, n))
     sum_W = W_plus + W_minus  # sum variable
 
     obj_ll = cp.norm(s_mat @ (np.eye(n) - W_plus + W_minus), "fro") ** 2
     obj_spars = l1_pen_param * cp.sum(W_plus + W_minus)
 
     obj_trace = cp.trace(C_param @ sum_W)
-    obj_kernel = inv_gamma_param * (dagness_pen * (n - 1) * (1 + dagness_exp * cp.norm(sum_W, "fro"))**n)
+    obj_kernel = inv_gamma_param * (dagness_pen * (n - 1) * (1 + dagness_exp * cp.norm(sum_W, "fro"))**degree_poly)
 
     obj = obj_ll + obj_spars + obj_trace + obj_kernel
     prob = cp.Problem(cp.Minimize(obj), [cp.sum(W_plus) + cp.sum(W_minus) >= n/((n-2)*dagness_exp)])
@@ -276,7 +297,7 @@ def layer_cvxtorch(s_mat, dagness_pen, dagness_exp):
     return layer
 
 
-def apply_bregman_map_cvxtorch(layer, Wk_plus_value, Wk_minus_value,
+def apply_bregman_map_cvxtorch(layer, Wk_plus_value, Wk_minus_value, degree_poly,
                                gamma, l1_pen, dagness_pen, dagness_exp):
     """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
         with new CVXPY layers and PyTorch
@@ -291,7 +312,7 @@ def apply_bregman_map_cvxtorch(layer, Wk_plus_value, Wk_minus_value,
             dagness_pen (float): mu in paper
             dagness_exp (float): alpha in paper
     """
-
+    raise NotImplementedError
 
     n = Wk_plus_value.shape[0]
 
@@ -311,7 +332,7 @@ def apply_bregman_map_cvxtorch(layer, Wk_plus_value, Wk_minus_value,
     tilde_W_minus = np.maximum(next_W_minus - next_W_plus, 0.0)
     tilde_sum = tilde_W_plus + tilde_W_minus
     #
-    if np.sum(tilde_sum) >= n / ((n - 2) * dagness_exp):
+    if np.sum(tilde_sum) >= n / ((degree_poly - 2) * dagness_exp):
         # Thresholding
         # tilde_W_plus[tilde_W_plus < 0.4] = 0
         # tilde_W_minus[tilde_W_minus < 0.4] = 0
@@ -323,7 +344,7 @@ def apply_bregman_map_cvxtorch(layer, Wk_plus_value, Wk_minus_value,
         return next_W_plus, next_W_minus
 
 
-def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
+def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value, degree_poly,
                       gamma, l1_pen, dagness_pen, dagness_exp):
     """ Solves argmin g(W) + <grad f (Wk), W-Wk> + 1/gamma * Dh(W, Wk)
         with MOSEK
@@ -342,7 +363,7 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
     n = s_mat.shape[1]
     # Compute C
     sum_Wk = Wk_plus_value + Wk_minus_value
-    C = compute_C(n, sum_Wk, dagness_pen, dagness_exp, 1 / gamma)
+    C = compute_C(n, sum_Wk, degree_poly, dagness_pen, dagness_exp, 1 / gamma)
     #
 
     with msk.Model('model') as M:
@@ -362,15 +383,15 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
         M.constraint("qc1", z1, msk.Domain.inQCone())
 
         # s1 <= s^{1/n}
-        M.constraint(msk.Expr.vstack(s, 1.0, s1), msk.Domain.inPPowerCone(1 / n))
+        M.constraint(msk.Expr.vstack(s, 1.0, s1), msk.Domain.inPPowerCone(1 / degree_poly))
 
         # t >= ||S(I-W)||^2
         z2 = msk.Expr.mul(s_mat, msk.Expr.sub(msk.Matrix.eye(n), diff_W))
         M.constraint("rqc1", msk.Expr.vstack(t, .5, msk.Expr.flatten(z2)), msk.Domain.inRotatedQCone())
 
-        # sum(W) >= n/(n-2)dagness_exp # C_alpha
+        # sum(W) >= n/(d-2)dagness_exp # C_alpha
         normW1 = msk.Expr.sum(sum_W)
-        M.constraint("lin1", normW1, msk.Domain.greaterThan(1.01*n/((n-2)*dagness_exp)))
+        M.constraint("lin1", normW1, msk.Domain.greaterThan(n/((degree_poly-2)*dagness_exp)))
 
         # Constrain diag to be zero
         M.constraint(W_plus.diag(), msk.Domain.equalsTo(0.0))
@@ -382,7 +403,7 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
         # Set the objective function
         obj_tr = msk.Expr.dot(C.T, sum_W)
         obj_vec = msk.Expr.vstack([t, obj_tr, s, normW1])
-        obj = msk.Expr.dot([1., 1., dagness_pen * (n - 1) / gamma, l1_pen], obj_vec)
+        obj = msk.Expr.dot([1., 1., dagness_pen * (degree_poly - 1) / gamma, l1_pen], obj_vec)
 
         M.objective(msk.ObjectiveSense.Minimize, obj)
         try:
@@ -403,19 +424,19 @@ def bregman_map_mosek(s_mat, Wk_plus_value, Wk_minus_value,
     tilde_sum = tilde_W_plus + tilde_W_minus
     # If we stay in the right space
     # set_trace()
-    if np.sum(tilde_sum) >= n/((n-2)*dagness_exp):
-        # Thresholding
-        # tilde_W_plus[tilde_W_plus < 0.4] = 0
-        # tilde_W_minus[tilde_W_minus < 0.4] = 0
-        # logging.warning("reduced:{},{}?".format(np.sum(next_W_minus + next_W_plus)- np.sum(tilde_sum),
-        #                                            n / ((n - 2) * dagness_exp)))
-        return tilde_W_plus, tilde_W_minus
-    else:
-        # Thresholding
-        # next_W_plus[next_W_plus < 0.4] = 0
-        # next_W_minus[next_W_minus < 0.4] = 0
-        # logging.warning("not reduced:{}>{}?".format(np.sum(next_W_minus + next_W_plus), n / ((n - 2) * dagness_exp)))
-        return next_W_plus, next_W_minus
+    # if np.sum(tilde_sum) >= n/((degree_poly - 2)*dagness_exp):
+    #     # Thresholding
+    #     # tilde_W_plus[tilde_W_plus < 0.4] = 0
+    #     # tilde_W_minus[tilde_W_minus < 0.4] = 0
+    #     # logging.warning("reduced:{},{}?".format(np.sum(next_W_minus + next_W_plus)- np.sum(tilde_sum),
+    #     #                                            n / ((degree_poly - 2) * dagness_exp)))
+    #     return tilde_W_plus, tilde_W_minus
+    # else:
+    #     # Thresholding
+    #     # next_W_plus[next_W_plus < 0.4] = 0
+    #     # next_W_minus[next_W_minus < 0.4] = 0
+    #     # logging.warning("not reduced:{}>{}?".format(np.sum(next_W_minus + next_W_plus), n / ((degree_poly - 2) * dagness_exp)))
+    return next_W_plus, next_W_minus
 
 
 def init_no_lips(s_mat, l1_pen):
@@ -436,10 +457,10 @@ def init_no_lips(s_mat, l1_pen):
     sum_W = W_plus + W_minus  # sum variable
 
     obj_ll = cp.norm(s_mat @ (np.eye(n) - W_plus + W_minus), "fro") ** 2
-    obj_spars = l1_pen * cp.sum(W_plus + W_minus)
+    obj_spars = l1_pen * cp.sum(sum_W)
 
     obj = obj_ll + obj_spars
-    prob = cp.Problem(cp.Minimize(obj))
+    prob = cp.Problem(cp.Minimize(obj), [cp.diag(sum_W) == np.zeros(n)])
     prob.solve()
 
     if prob.status != "optimal":
