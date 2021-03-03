@@ -36,17 +36,21 @@ class CLSolver:
         if self.device is None:
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    def fit(self, X):
+    def fit(self, X, degree_poly=None):
         """Returns output adjacency matrix from Causal Lasso"""
         n = X.shape[1]
+        if degree_poly is None:
+            self.degree_poly = n
+        else:
+            self.degree_poly = degree_poly
         if self.version == "gen":
             if self.init_without_dag:
                 W0_plus, W0_minus = gen_module.init_no_lips(X, self.l1_pen)
             else:
                 W0_plus, W0_minus = np.random.random((n, n)), np.random.random((n, n))
 
-            W_out, log_dict = gen_module.dyn_no_lips_gen(X, W0_plus, W0_minus, self.dagness_exp, self.dagness_pen,
-                                                         self.l1_pen,
+            W_out, log_dict = gen_module.dyn_no_lips_gen(X, W0_plus, W0_minus, self.degree_poly,
+                                                         self.dagness_exp, self.dagness_pen, self.l1_pen,
                                                          eps=self.eps, solver=self.solver, max_iter=self.max_iter,
                                                          logging_dict=self.logging,
                                                          device=self.device)
@@ -55,10 +59,10 @@ class CLSolver:
                 W0 = pos_module.init_no_lips(X, self.l1_pen)
             else:
                 W0 = np.random.random((n, n))
-            W_out, log_dict = pos_module.dyn_no_lips_pos(X, W0, self.dagness_exp, self.dagness_pen, self.l1_pen,
+            W_out, log_dict = pos_module.dyn_no_lips_pos(X, W0, self.degree_poly,
+                                                         self.dagness_exp, self.dagness_pen, self.l1_pen,
                                                          eps=self.eps, solver=self.solver, max_iter=self.max_iter,
-                                                        verbose=self.verbose, logging_dict=self.logging,
-                                                         device=self.device)
+                                                         logging_dict=self.logging, device=self.device)
         # Final thresholding
         W_out = np.where(np.abs(W_out) > 0.5, W_out, 0)
         self.sol = W_out
