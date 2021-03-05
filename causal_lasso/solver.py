@@ -19,7 +19,7 @@ class CLSolver:
             logging: if true, solver will logged an important number of metrics at each iteration in self.log_dict
     """
     def __init__(self, version="gen", dagness_pen=100, dagness_exp=1e-2, l1_pen=1e-6,
-                 eps=1e-7, max_iter=200, solver="mosek", init_without_dag=True,
+                 eps=1e-7, max_iter=200, solver="mosek", init="random", w_opt=None,
                  logging=False, device=None):
         """Inits solver"""
         self.version = version
@@ -32,7 +32,8 @@ class CLSolver:
         self.logging = logging
         # Get gpu
         self.device = device
-        self.init_without_dag = init_without_dag
+        self.init = init
+        self.w_opt = w_opt
         if self.device is None:
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -40,10 +41,19 @@ class CLSolver:
         """Returns output adjacency matrix from Causal Lasso"""
         n = X.shape[1]
         if self.version == "gen":
-            if self.init_without_dag:
+            if self.init == "l2":
                 W0_plus, W0_minus = gen_module.init_no_lips(X, self.l1_pen)
-            else:
+            elif self.init == "random":
                 W0_plus, W0_minus = np.random.random((n, n)), np.random.random((n, n))
+                norm = np.sqrt(np.sum((W0_plus+W0_minus)**2))
+                W0_plus /= norm
+                W0_minus /= norm
+            elif self.init == "opt":
+                assert self.w_opt is not None
+                W0_plus = np.maximum(self.w_opt, 0)
+                W0_minus = np.maximum(-self.w_opt, 0)
+            else:
+                raise NotImplementedError
 
             W_out, log_dict = gen_module.dyn_no_lips_gen(X, W0_plus, W0_minus, self.dagness_exp, self.dagness_pen,
                                                          self.l1_pen,
@@ -51,10 +61,15 @@ class CLSolver:
                                                          logging_dict=self.logging,
                                                          device=self.device)
         else:
-            if self.init_without_dag:
+            if self.init == "l2":
                 W0 = pos_module.init_no_lips(X, self.l1_pen)
-            else:
+            elif self.init == "random":
                 W0 = np.random.random((n, n))
+            elif self.init == "opt":
+                assert self.w_opt is not None
+                W0 = self.w_opt
+            else:
+                raise NotImplementedError
             W_out, log_dict = pos_module.dyn_no_lips_pos(X, W0, self.dagness_exp, self.dagness_pen, self.l1_pen,
                                                          eps=self.eps, solver=self.solver, max_iter=self.max_iter,
                                                          logging_dict=self.logging,
